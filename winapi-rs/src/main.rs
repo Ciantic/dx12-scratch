@@ -547,7 +547,7 @@ impl Window {
         // let pipeline = self.pipeline_state.as_ref().unwrap();
         let root_signature = self.root_signature.as_ref().unwrap();
 
-        if unsafe { allocator.Reset() } > 0 {
+        if unsafe { allocator.Reset() } != 0 {
             panic!("allocator reset failed");
         }
 

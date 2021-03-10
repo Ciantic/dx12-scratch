@@ -1,3 +1,4 @@
+use std::{convert::TryInto, mem, ptr, rc::Weak};
 use std::{ffi::c_void, ptr::null_mut};
 
 use bindings::{
@@ -6,6 +7,7 @@ use bindings::{
     windows::win32::menus_and_resources::*, windows::win32::system_services::*,
     windows::win32::windows_and_messaging::*, windows::*,
 };
+use ptr::null;
 use windows::{Abi, IUnknown, Interface};
 
 const NUM_OF_FRAMES: usize = 2;
@@ -23,9 +25,12 @@ struct Window {
     comp_visual: IDCompositionVisual,
     // list: ID3D12GraphicsCommandList,
     rtv_desc_heap: ID3D12DescriptorHeap,
+    rtv_desc_size: usize,
     // desc_size: Option<u32>,
-    // resources: [ID3D12Resource; NUM_OF_FRAMES],
-    resources: Vec<ID3D12Resource>,
+    resources: [ID3D12Resource; NUM_OF_FRAMES],
+    root_signature: ID3D12RootSignature,
+    list_graphics_direct: ID3D12GraphicsCommandList,
+    // resources: Vec<ID3D12Resource>,
     // pipeline_state: ID3D12PipelineState,
     // root_signature: ID3D12RootSignature,
 }
@@ -135,6 +140,7 @@ impl Window {
             comp_device.Commit().unwrap();
         }
 
+        // Create descriptor heap for render target views
         let rtv_desc_heap = unsafe {
             let desc = D3D12_DESCRIPTOR_HEAP_DESC {
                 r#type: D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
@@ -154,9 +160,8 @@ impl Window {
         let rtv_desc_size = unsafe {
             device.GetDescriptorHandleIncrementSize(
                 D3D12_DESCRIPTOR_HEAP_TYPE::D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-            )
+            ) as usize
         };
-
         let resources = (0..NUM_OF_FRAMES)
             .map(|i| {
                 let resource = unsafe {
@@ -174,16 +179,76 @@ impl Window {
                     //     ViewDimension: 0,
                     // };
                     device.CreateRenderTargetView(resource.clone(), 0 as _, descriptor.clone());
-                    descriptor.ptr += rtv_desc_size as usize;
+                    descriptor.ptr += rtv_desc_size;
                 }
 
                 resource
             })
-            .collect::<Vec<_>>();
-        // TODO: Apparently it is not possible to collect ID3D12Resources to
-        // Array like in other examples, this is a bit unfortunate. One could
-        // collect ID3D12Resource.abi() pointers to array, but it becomes a
-        // hassle to use?
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Unable to create resources");
+
+        // Create root signature
+        let root_signature = unsafe {
+            let root = {
+                let mut blob: Option<ID3DBlob> = None;
+                let mut error: Option<ID3DBlob> = None;
+
+                let desc = D3D12_ROOT_SIGNATURE_DESC {
+                    num_parameters: 0,
+                    p_parameters: null_mut() as _,
+                    num_static_samplers: 0,
+                    p_static_samplers: null_mut() as _,
+                    flags: D3D12_ROOT_SIGNATURE_FLAGS::D3D12_ROOT_SIGNATURE_FLAG_NONE,
+                };
+                D3D12SerializeRootSignature(
+                    &desc,
+                    D3D_ROOT_SIGNATURE_VERSION::D3D_ROOT_SIGNATURE_VERSION_1_0,
+                    &mut blob as _,
+                    &mut error as _,
+                )
+                .and_then(|| {
+                    if error.is_none() {
+                        blob.unwrap()
+                    } else {
+                        panic!("Root signature failed, error blob contains the error")
+                    }
+                })
+            }
+            .expect("Root signature serialization failed");
+
+            let mut ptr: Option<ID3D12RootSignature> = None;
+            device
+                .CreateRootSignature(
+                    0,
+                    root.GetBufferPointer(),
+                    root.GetBufferSize(),
+                    &ID3D12RootSignature::IID,
+                    ptr.set_abi(),
+                )
+                .and_some(ptr)
+        }
+        .expect("Unable to create root signature");
+
+        // Create direct command list
+        let list_graphics_direct = unsafe {
+            let mut ptr: Option<ID3D12GraphicsCommandList> = None;
+            device
+                .CreateCommandList(
+                    0,
+                    D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT,
+                    allocator.clone(),
+                    None,
+                    &ID3D12GraphicsCommandList::IID,
+                    ptr.set_abi(),
+                )
+                .and_then(|| {
+                    let ptr = ptr.unwrap();
+                    ptr.Close().unwrap();
+                    ptr
+                })
+        }
+        .expect("Unable to create command list");
 
         Ok(Window {
             hwnd,
@@ -197,8 +262,54 @@ impl Window {
             comp_target,
             comp_visual,
             rtv_desc_heap,
+            rtv_desc_size,
             resources,
+            root_signature,
+            list_graphics_direct,
         })
+    }
+
+    fn populate_command_list(&mut self) {
+        unsafe {
+            // Get the current backbuffer on which to draw
+            let current_frame = unsafe { self.swap_chain.GetCurrentBackBufferIndex() as usize };
+            let current_resource = &self.resources[current_frame];
+            let current_resource_desc = {
+                let mut ptr = self.rtv_desc_heap.GetCPUDescriptorHandleForHeapStart();
+                ptr.ptr += self.rtv_desc_size * current_frame;
+                ptr
+            };
+
+            self.allocator.Reset().unwrap();
+            self.list_graphics_direct
+                .Reset(self.allocator.clone(), None)
+                .unwrap();
+            self.list_graphics_direct
+                .SetGraphicsRootSignature(self.root_signature.clone());
+
+            self.list_graphics_direct.ClearRenderTargetView(
+                current_resource_desc,
+                [1.0f32, 0.2, 0.4, 0.5].as_ptr(),
+                0,
+                null_mut(),
+            );
+
+            self.list_graphics_direct.Close().unwrap();
+        }
+    }
+
+    pub fn render(&mut self) {
+        self.populate_command_list();
+        unsafe {
+            let mut lists = [Some(
+                self.list_graphics_direct
+                    .cast::<ID3D12CommandList>()
+                    .unwrap(),
+            )];
+            self.queue
+                .ExecuteCommandLists(lists.len() as _, lists.as_mut_ptr());
+            self.swap_chain.Present(1, 0).unwrap();
+        }
     }
 }
 
@@ -212,6 +323,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 DefWindowProcA(hwnd, msg, wparam, lparam)
             }
             WM_PAINT => {
+                if let Some(window) = WINDOW.as_mut() {
+                    window.render();
+                }
                 ValidateRect(hwnd, std::ptr::null());
                 LRESULT(0)
             }
