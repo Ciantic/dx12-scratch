@@ -1,17 +1,16 @@
-use std::{convert::TryInto, mem, ptr, rc::Weak};
-use std::{ffi::c_void, ptr::null_mut};
-
 use bindings::{
     windows::win32::direct3d11::*, windows::win32::direct3d12::*,
     windows::win32::direct_composition::*, windows::win32::dxgi::*, windows::win32::gdi::*,
     windows::win32::menus_and_resources::*, windows::win32::system_services::*,
-    windows::win32::windows_and_messaging::*, windows::*,
+    windows::win32::windows_and_messaging::*,
 };
-use ptr::null;
-use windows::{Abi, IUnknown, Interface};
+use std::convert::TryInto;
+use std::ptr::null_mut;
+use windows::{Abi, Interface};
 
 const NUM_OF_FRAMES: usize = 2;
 
+#[allow(dead_code)]
 struct Window {
     hwnd: HWND,
     factory: IDXGIFactory4,
@@ -270,8 +269,8 @@ impl Window {
     fn populate_command_list(&mut self) {
         unsafe {
             // Get the current backbuffer on which to draw
-            let current_frame = unsafe { self.swap_chain.GetCurrentBackBufferIndex() as usize };
-            let current_resource = &self.resources[current_frame];
+            let current_frame = self.swap_chain.GetCurrentBackBufferIndex() as usize;
+            let _current_resource = &self.resources[current_frame];
             let current_resource_desc = {
                 let mut ptr = self.rtv_desc_heap.GetCPUDescriptorHandleForHeapStart();
                 ptr.ptr += self.rtv_desc_size * current_frame;

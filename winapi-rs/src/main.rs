@@ -1,38 +1,39 @@
 use core::mem::MaybeUninit;
-use std::{convert::TryInto, mem, ptr, rc::Weak};
-
 use ptr::{null, null_mut};
-use winapi::um::{d3d12::*, d3d12sdklayers::ID3D12Debug, unknwnbase::IUnknown, winuser};
+use std::{convert::TryInto, mem, ptr};
+use winapi::shared::dxgi::*;
+use winapi::shared::dxgi1_2::*;
+use winapi::shared::dxgi1_3::*;
+use winapi::shared::dxgi1_4::*;
+use winapi::shared::dxgiformat::*;
+use winapi::shared::dxgitype::*;
+use winapi::shared::minwindef::*;
+use winapi::shared::windef::*;
+use winapi::um::d3d12::*;
+use winapi::um::d3dcommon::*;
+use winapi::um::dcomp::*;
+use winapi::um::unknwnbase::IUnknown;
+use winapi::um::winuser;
 use winapi::Interface;
-use winapi::{
-    shared::{
-        dxgi::IDXGIAdapter1, dxgi1_3::*, dxgi1_4::*, dxgiformat::*, dxgitype::*, windef::HWND,
-    },
-    um::{d3dcommon::*, dcomp::IDCompositionDevice},
-};
-use winapi::{
-    shared::{dxgi::*, dxgi1_2::*, minwindef::*},
-    um::dcomp::*,
-};
-use winuser::ValidateRect;
 use wio::com::ComPtr;
 
 const NUM_OF_FRAMES: usize = 2;
 
-const CD3DX12_RASTERIZER_DESC_D3D12_DEFAULT: D3D12_RASTERIZER_DESC = D3D12_RASTERIZER_DESC {
-    FillMode: D3D12_FILL_MODE_SOLID,
-    CullMode: D3D12_CULL_MODE_BACK,
-    FrontCounterClockwise: FALSE,
-    DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
-    DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
-    SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
-    DepthClipEnable: TRUE,
-    MultisampleEnable: FALSE,
-    AntialiasedLineEnable: FALSE,
-    ForcedSampleCount: 0,
-    ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
-};
+// const CD3DX12_RASTERIZER_DESC_D3D12_DEFAULT: D3D12_RASTERIZER_DESC = D3D12_RASTERIZER_DESC {
+//     FillMode: D3D12_FILL_MODE_SOLID,
+//     CullMode: D3D12_CULL_MODE_BACK,
+//     FrontCounterClockwise: FALSE,
+//     DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
+//     DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+//     SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
+//     DepthClipEnable: TRUE,
+//     MultisampleEnable: FALSE,
+//     AntialiasedLineEnable: FALSE,
+//     ForcedSampleCount: 0,
+//     ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+// };
 
+#[allow(dead_code)]
 struct Window {
     factory: ComPtr<IDXGIFactory4>,
     adapter: ComPtr<IDXGIAdapter1>,
@@ -309,21 +310,22 @@ impl Window {
                     pStaticSamplers: null_mut() as _,
                     Flags: 0,
                 };
-                let hr = unsafe {
-                    D3D12SerializeRootSignature(
-                        &desc,
-                        D3D_ROOT_SIGNATURE_VERSION_1_0,
-                        &mut blob as _,
-                        &mut error as _,
-                    )
-                };
-                if hr > 0 {
+
+                if D3D12SerializeRootSignature(
+                    &desc,
+                    D3D_ROOT_SIGNATURE_VERSION_1_0,
+                    &mut blob as _,
+                    &mut error as _,
+                ) != 0
+                {
                     panic!("Unable to serialize root signature (serialization)");
                 }
+
                 if !error.is_null() {
                     panic!("Unable to serialize root signature (error blobbie)");
                 }
-                unsafe { ComPtr::from_raw(blob) }
+
+                ComPtr::from_raw(blob)
             };
             let mut ptr = null_mut::<ID3D12RootSignature>();
             let hr = device.CreateRootSignature(
@@ -516,7 +518,7 @@ unsafe extern "system" fn wndproc(
             if let Some(window) = WINDOW.as_mut() {
                 window.render();
             }
-            ValidateRect(hwnd, null());
+            winuser::ValidateRect(hwnd, null());
             0
         }
         winuser::WM_DESTROY => {
