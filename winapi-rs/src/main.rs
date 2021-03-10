@@ -10,6 +10,7 @@ use winapi::shared::dxgitype::*;
 use winapi::shared::minwindef::*;
 use winapi::shared::windef::*;
 use winapi::um::d3d12::*;
+use winapi::um::d3d12sdklayers::*;
 use winapi::um::d3dcommon::*;
 use winapi::um::dcomp::*;
 use winapi::um::unknwnbase::IUnknown;

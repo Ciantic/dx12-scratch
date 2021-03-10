@@ -34,6 +34,16 @@ struct Window {
 
 impl Window {
     pub fn new(hwnd: HWND) -> windows::Result<Self> {
+        // let debug = unsafe {
+        //     let mut ptr: Option<ID3D12Debug> = None;
+        //     D3D12GetDebugInterface(&ID3D12Debug::IID, ptr.set_abi()).and_some(ptr)
+        // }
+        // .expect("Unable to create debug layer");
+
+        // unsafe {
+        //     debug.EnableDebugLayer();
+        // }
+
         let factory = unsafe {
             let mut ptr: Option<IDXGIFactory4> = None;
             CreateDXGIFactory2(0, &IDXGIFactory4::IID, ptr.set_abi()).and_some(ptr)
