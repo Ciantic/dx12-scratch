@@ -3,20 +3,34 @@ use std::{convert::TryInto, mem, ptr, rc::Weak};
 
 use ptr::{null, null_mut};
 use winapi::um::{d3d12::*, d3d12sdklayers::ID3D12Debug, unknwnbase::IUnknown, winuser};
+use winapi::Interface;
 use winapi::{
     shared::{
         dxgi::IDXGIAdapter1, dxgi1_3::*, dxgi1_4::*, dxgiformat::*, dxgitype::*, windef::HWND,
     },
-    um::{d3d12::*, d3dcommon::*, dcomp::IDCompositionDevice},
+    um::{d3dcommon::*, dcomp::IDCompositionDevice},
 };
 use winapi::{
     shared::{dxgi::*, dxgi1_2::*, minwindef::*},
     um::dcomp::*,
 };
-use winapi::{um::d3d12::D3D12_GRAPHICS_PIPELINE_STATE_DESC, Interface};
 use wio::com::ComPtr;
 
 const NUM_OF_FRAMES: usize = 2;
+
+const CD3DX12_RASTERIZER_DESC_D3D12_DEFAULT: D3D12_RASTERIZER_DESC = D3D12_RASTERIZER_DESC {
+    FillMode: D3D12_FILL_MODE_SOLID,
+    CullMode: D3D12_CULL_MODE_BACK,
+    FrontCounterClockwise: FALSE,
+    DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
+    DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+    SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
+    DepthClipEnable: TRUE,
+    MultisampleEnable: FALSE,
+    AntialiasedLineEnable: FALSE,
+    ForcedSampleCount: 0,
+    ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+};
 
 struct Window {
     factory: Option<ComPtr<IDXGIFactory4>>,
@@ -24,15 +38,15 @@ struct Window {
     device: Option<ComPtr<ID3D12Device>>,
     queue: Option<ComPtr<ID3D12CommandQueue>>,
     allocator: Option<ComPtr<ID3D12CommandAllocator>>,
+    comp_device: Option<ComPtr<IDCompositionDevice>>,
+    swap_chain: Option<ComPtr<IDXGISwapChain3>>,
     list: Option<ComPtr<ID3D12GraphicsCommandList>>,
     desc_heap: Option<ComPtr<ID3D12DescriptorHeap>>,
     desc_size: Option<u32>,
-    comp_device: Option<ComPtr<IDCompositionDevice>>,
     comp_target: Option<ComPtr<IDCompositionTarget>>,
     comp_visual: Option<ComPtr<IDCompositionVisual>>,
-    swap_chain: Option<ComPtr<IDXGISwapChain3>>,
     resources: Option<[ComPtr<ID3D12Resource>; NUM_OF_FRAMES]>,
-    pipeline_state: Option<ComPtr<ID3D12PipelineState>>,
+    // pipeline_state: Option<ComPtr<ID3D12PipelineState>>,
     root_signature: Option<ComPtr<ID3D12RootSignature>>,
 }
 
@@ -171,9 +185,6 @@ impl Window {
         .cast::<IDXGISwapChain3>()
         .expect("Unable to cast to swapchain");
 
-        // let swap_chain3 = swap_chain
-        //    ;
-
         // Create IDCompositionTarget for the window
         let comp_target = unsafe {
             let mut ptr = null_mut::<IDCompositionTarget>();
@@ -269,6 +280,11 @@ impl Window {
                 .expect("Unable to create resource");
 
                 unsafe {
+                    // let desc = D3D12_TEX2D_RTV {
+                    //     Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    //     u: D3D12_RTV_DIMENSION_UNKNOWN as _,
+                    //     ViewDimension: 0,
+                    // };
                     device.CreateRenderTargetView(resource.as_raw(), 0 as _, descriptor);
                     descriptor.ptr += desc_rtv_size as usize;
                 }
@@ -337,106 +353,153 @@ impl Window {
         }
         .expect("Unable to create root signature");
 
-        let rtvs = [DXGI_FORMAT_UNKNOWN; 8];
-        let dummy_target = D3D12_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: FALSE,
-            LogicOpEnable: FALSE,
-            SrcBlend: D3D12_BLEND_ZERO,
-            DestBlend: D3D12_BLEND_ZERO,
-            BlendOp: D3D12_BLEND_OP_ADD,
-            SrcBlendAlpha: D3D12_BLEND_ZERO,
-            DestBlendAlpha: D3D12_BLEND_ZERO,
-            BlendOpAlpha: D3D12_BLEND_OP_ADD,
-            LogicOp: D3D12_LOGIC_OP_CLEAR,
-            RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
-        };
-        let render_targets = [dummy_target; 8];
+        // let rtvs = [DXGI_FORMAT_R8G8B8A8_UNORM; 8];
+        // let dummy_target = D3D12_RENDER_TARGET_BLEND_DESC {
+        //     BlendEnable: FALSE,
+        //     LogicOpEnable: FALSE,
+        //     SrcBlend: D3D12_BLEND_ZERO,
+        //     DestBlend: D3D12_BLEND_ZERO,
+        //     BlendOp: D3D12_BLEND_OP_ADD,
+        //     SrcBlendAlpha: D3D12_BLEND_ZERO,
+        //     DestBlendAlpha: D3D12_BLEND_ZERO,
+        //     BlendOpAlpha: D3D12_BLEND_OP_ADD,
+        //     LogicOp: D3D12_LOGIC_OP_CLEAR,
+        //     RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
+        // };
+        // let render_targets = [dummy_target; 8];
 
-        let input_elements = [/*
-        D3D12_INPUT_ELEMENT_DESC {
-            SemanticName: "COLOR".as_ptr() as *const _,
+        // let input_elements = [D3D12_INPUT_ELEMENT_DESC {
+        //     SemanticName: "COLOR".as_ptr() as *const _,
+        //     SemanticIndex: 0,
+        //     Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+        //     AlignedByteOffset: 0,
+        //     InputSlot: 0,
+        //     InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+        //     InstanceDataStepRate: 0,
+        // }];
+
+        // let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+        //     pRootSignature: root_signature.as_raw(),
+        //     // VS: Shader::from_blob(vs),
+        //     // PS: Shader::from_blob(ps),
+        //     VS: D3D12_SHADER_BYTECODE {
+        //         BytecodeLength: 0,
+        //         pShaderBytecode: ptr::null(),
+        //     },
+        //     PS: D3D12_SHADER_BYTECODE {
+        //         BytecodeLength: 0,
+        //         pShaderBytecode: ptr::null(),
+        //     },
+        //     GS: D3D12_SHADER_BYTECODE {
+        //         BytecodeLength: 0,
+        //         pShaderBytecode: ptr::null(),
+        //     },
+        //     DS: D3D12_SHADER_BYTECODE {
+        //         BytecodeLength: 0,
+        //         pShaderBytecode: ptr::null(),
+        //     },
+        //     HS: D3D12_SHADER_BYTECODE {
+        //         BytecodeLength: 0,
+        //         pShaderBytecode: ptr::null(),
+        //     },
+        //     StreamOutput: D3D12_STREAM_OUTPUT_DESC {
+        //         pSODeclaration: ptr::null(),
+        //         NumEntries: 0,
+        //         pBufferStrides: ptr::null(),
+        //         NumStrides: 0,
+        //         RasterizedStream: 0,
+        //     },
+        //     BlendState: D3D12_BLEND_DESC {
+        //         AlphaToCoverageEnable: FALSE,
+        //         IndependentBlendEnable: FALSE,
+        //         RenderTarget: render_targets,
+        //     },
+        //     SampleMask: !0,
+        //     RasterizerState: D3D12_RASTERIZER_DESC {
+        //         FillMode: D3D12_FILL_MODE_SOLID,
+        //         CullMode: D3D12_CULL_MODE_BACK,
+        //         FrontCounterClockwise: FALSE,
+        //         DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
+        //         DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+        //         SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
+        //         DepthClipEnable: TRUE,
+        //         MultisampleEnable: FALSE,
+        //         AntialiasedLineEnable: FALSE,
+        //         ForcedSampleCount: 0,
+        //         ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+        //     },
+        //     DepthStencilState: unsafe { mem::zeroed() },
+        //     InputLayout: D3D12_INPUT_LAYOUT_DESC {
+        //         pInputElementDescs: input_elements.as_ptr(),
+        //         NumElements: input_elements.len() as _,
+        //     },
+        //     IBStripCutValue: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED,
+        //     PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+        //     NumRenderTargets: 1,
+        //     RTVFormats: rtvs,
+        //     DSVFormat: DXGI_FORMAT_UNKNOWN,
+        //     SampleDesc: DXGI_SAMPLE_DESC {
+        //         Count: 1,
+        //         Quality: 0,
+        //     },
+        //     NodeMask: 0,
+        //     CachedPSO: D3D12_CACHED_PIPELINE_STATE {
+        //         pCachedBlob: ptr::null(),
+        //         CachedBlobSizeInBytes: 0,
+        //     },
+        //     Flags: D3D12_PIPELINE_STATE_FLAG_NONE,
+        // };
+
+        let input_elements = [D3D12_INPUT_ELEMENT_DESC {
+            SemanticName: "COLOR\0".as_ptr() as *const _,
             SemanticIndex: 0,
             Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
             AlignedByteOffset: 0,
             InputSlot: 0,
             InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
             InstanceDataStepRate: 0,
-        }
-         */];
+        }];
 
-        let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-            pRootSignature: root_signature.as_raw(),
-            // VS: Shader::from_blob(vs),
-            // PS: Shader::from_blob(ps),
-            VS: D3D12_SHADER_BYTECODE {
-                BytecodeLength: 0,
-                pShaderBytecode: ptr::null(),
-            },
-            PS: D3D12_SHADER_BYTECODE {
-                BytecodeLength: 0,
-                pShaderBytecode: ptr::null(),
-            },
-            GS: D3D12_SHADER_BYTECODE {
-                BytecodeLength: 0,
-                pShaderBytecode: ptr::null(),
-            },
-            DS: D3D12_SHADER_BYTECODE {
-                BytecodeLength: 0,
-                pShaderBytecode: ptr::null(),
-            },
-            HS: D3D12_SHADER_BYTECODE {
-                BytecodeLength: 0,
-                pShaderBytecode: ptr::null(),
-            },
-            StreamOutput: D3D12_STREAM_OUTPUT_DESC {
-                pSODeclaration: ptr::null(),
-                NumEntries: 0,
-                pBufferStrides: ptr::null(),
-                NumStrides: 0,
-                RasterizedStream: 0,
-            },
-            BlendState: D3D12_BLEND_DESC {
-                AlphaToCoverageEnable: FALSE,
-                IndependentBlendEnable: FALSE,
-                RenderTarget: render_targets,
-            },
-            SampleMask: !0,
-            RasterizerState: D3D12_RASTERIZER_DESC {
-                FillMode: D3D12_FILL_MODE_SOLID,
-                CullMode: D3D12_CULL_MODE_BACK,
-                FrontCounterClockwise: FALSE,
-                DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
-                DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
-                SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
-                DepthClipEnable: TRUE,
-                MultisampleEnable: FALSE,
-                AntialiasedLineEnable: FALSE,
-                ForcedSampleCount: 0,
-                ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
-            },
-            DepthStencilState: unsafe { mem::zeroed() },
-            InputLayout: D3D12_INPUT_LAYOUT_DESC {
-                pInputElementDescs: input_elements.as_ptr(),
-                NumElements: input_elements.len() as _,
-            },
-            IBStripCutValue: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED,
-            PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            NumRenderTargets: 1,
-            RTVFormats: rtvs,
-            DSVFormat: DXGI_FORMAT_UNKNOWN,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            NodeMask: 0,
-            CachedPSO: D3D12_CACHED_PIPELINE_STATE {
-                pCachedBlob: ptr::null(),
-                CachedBlobSizeInBytes: 0,
-            },
-            Flags: D3D12_PIPELINE_STATE_FLAG_NONE,
+        let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+            ..unsafe { mem::zeroed() }
         };
+        pso_desc.InputLayout = D3D12_INPUT_LAYOUT_DESC {
+            NumElements: input_elements.len() as _,
+            pInputElementDescs: &input_elements as _,
+        };
+        pso_desc.pRootSignature = root_signature.as_raw();
+        pso_desc.RasterizerState = CD3DX12_RASTERIZER_DESC_D3D12_DEFAULT;
 
-        // TODO: WTF
+        // CD3DX12_BLEND_DESC(D3D12_DEFAULT)
+        pso_desc.BlendState = D3D12_BLEND_DESC {
+            AlphaToCoverageEnable: FALSE,
+            IndependentBlendEnable: FALSE,
+            ..unsafe { mem::zeroed() }
+        };
+        for i in 0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT as usize {
+            pso_desc.BlendState.RenderTarget[i] = D3D12_RENDER_TARGET_BLEND_DESC {
+                BlendEnable: FALSE,
+                LogicOpEnable: FALSE,
+                BlendOp: D3D12_BLEND_OP_ADD,
+                BlendOpAlpha: D3D12_BLEND_OP_ADD,
+                SrcBlend: D3D12_BLEND_ONE,
+                DestBlend: D3D12_BLEND_ONE,
+                DestBlendAlpha: D3D12_BLEND_ZERO,
+                SrcBlendAlpha: D3D12_BLEND_ZERO,
+                LogicOp: D3D12_LOGIC_OP_NOOP,
+                RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
+            }
+        }
+
+        pso_desc.DepthStencilState.DepthEnable = FALSE;
+        pso_desc.DepthStencilState.StencilEnable = FALSE;
+        pso_desc.SampleMask = !0;
+        pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pso_desc.NumRenderTargets = 1;
+        pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        pso_desc.SampleDesc.Count = 1;
+
+        // // TODO: WTF
         // let pipeline = unsafe {
         //     let mut ptr = null_mut::<ID3D12PipelineState>();
         //     let hr = device.CreateGraphicsPipelineState(
@@ -455,7 +518,7 @@ impl Window {
                 0,
                 D3D12_COMMAND_LIST_TYPE_DIRECT,
                 allocator.as_raw(),
-                0 as _,
+                null_mut(), //pipeline.as_raw(),
                 &ID3D12GraphicsCommandList::uuidof(),
                 &mut ptr as *mut *mut _ as *mut *mut _,
             );
@@ -489,7 +552,10 @@ impl Window {
         }
 
         // TODO pInitialState: pipeline.as_raw()
-        if unsafe { list.Reset(allocator.as_raw(), 0 as _) } > 0 {
+        if unsafe {
+            list.Reset(allocator.as_raw(), null_mut() /*pipeline.as_raw()*/)
+        } > 0
+        {
             panic!("Unable to reset list");
         }
 
@@ -581,9 +647,10 @@ impl Window {
             queue.ExecuteCommandLists(lists.len() as _, lists.as_ptr());
             swap_chain.Present(1, 0)
         };
-        if hr > 0 {
-            panic!("Present failed");
-        }
+        // TODO: Present fails, probably because of things...
+        // if hr != 0 {
+        //     panic!("Present failed");
+        // }
         println!("Render");
     }
 }
@@ -613,7 +680,7 @@ unsafe extern "system" fn wndproc(
         comp_visual: None,
         resources: None,
         swap_chain: None,
-        pipeline_state: None,
+        // pipeline_state: None,
         root_signature: None,
     };
 
