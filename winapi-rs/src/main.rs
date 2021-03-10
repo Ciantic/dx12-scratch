@@ -14,6 +14,7 @@ use winapi::{
     shared::{dxgi::*, dxgi1_2::*, minwindef::*},
     um::dcomp::*,
 };
+use winuser::ValidateRect;
 use wio::com::ComPtr;
 
 const NUM_OF_FRAMES: usize = 2;
@@ -33,28 +34,28 @@ const CD3DX12_RASTERIZER_DESC_D3D12_DEFAULT: D3D12_RASTERIZER_DESC = D3D12_RASTE
 };
 
 struct Window {
-    factory: Option<ComPtr<IDXGIFactory4>>,
-    adapter: Option<ComPtr<IDXGIAdapter1>>,
-    device: Option<ComPtr<ID3D12Device>>,
-    queue: Option<ComPtr<ID3D12CommandQueue>>,
-    allocator: Option<ComPtr<ID3D12CommandAllocator>>,
-    comp_device: Option<ComPtr<IDCompositionDevice>>,
-    swap_chain: Option<ComPtr<IDXGISwapChain3>>,
-    list: Option<ComPtr<ID3D12GraphicsCommandList>>,
-    desc_heap: Option<ComPtr<ID3D12DescriptorHeap>>,
-    desc_size: Option<u32>,
-    comp_target: Option<ComPtr<IDCompositionTarget>>,
-    comp_visual: Option<ComPtr<IDCompositionVisual>>,
-    resources: Option<[ComPtr<ID3D12Resource>; NUM_OF_FRAMES]>,
-    // pipeline_state: Option<ComPtr<ID3D12PipelineState>>,
-    root_signature: Option<ComPtr<ID3D12RootSignature>>,
+    factory: ComPtr<IDXGIFactory4>,
+    adapter: ComPtr<IDXGIAdapter1>,
+    device: ComPtr<ID3D12Device>,
+    queue: ComPtr<ID3D12CommandQueue>,
+    allocator: ComPtr<ID3D12CommandAllocator>,
+    comp_device: ComPtr<IDCompositionDevice>,
+    swap_chain: ComPtr<IDXGISwapChain3>,
+    list: ComPtr<ID3D12GraphicsCommandList>,
+    desc_heap: ComPtr<ID3D12DescriptorHeap>,
+    desc_size: usize,
+    comp_target: ComPtr<IDCompositionTarget>,
+    comp_visual: ComPtr<IDCompositionVisual>,
+    resources: [ComPtr<ID3D12Resource>; NUM_OF_FRAMES],
+    // pipeline_state: ComPtr<ID3D12PipelineState>,
+    root_signature: ComPtr<ID3D12RootSignature>,
 }
 
 // fn hr(hresult: HRESULT, ptr: *mut *mut c_void)  -> ComPtr<T>
 
 impl Window {
     /// Create drawing resources for the window
-    pub fn create_drawing_resources(&mut self, hwnd: HWND) {
+    pub fn new(hwnd: HWND) -> Self {
         println!("HWND {}", hwnd as u32);
 
         // let debug = unsafe {
@@ -263,8 +264,9 @@ impl Window {
 
         // Create resource per frame
         let mut descriptor = unsafe { desc_heap.GetCPUDescriptorHandleForHeapStart() };
-        let desc_rtv_size =
-            unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) };
+        let desc_size = unsafe {
+            device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize
+        };
 
         let resources = (0..NUM_OF_FRAMES)
             .map(|i| {
@@ -286,7 +288,7 @@ impl Window {
                     //     ViewDimension: 0,
                     // };
                     device.CreateRenderTargetView(resource.as_raw(), 0 as _, descriptor);
-                    descriptor.ptr += desc_rtv_size as usize;
+                    descriptor.ptr += desc_size as usize;
                 }
 
                 resource
@@ -295,52 +297,34 @@ impl Window {
             .try_into()
             .expect("Unable to get resources as array");
 
-        self.factory = Some(factory);
-        self.adapter = Some(adapter);
-        self.device = Some(device);
-        self.queue = Some(queue);
-        self.allocator = Some(allocator);
-        self.desc_heap = Some(desc_heap);
-        self.desc_size = Some(desc_rtv_size);
-        self.swap_chain = Some(swap_chain);
-        self.comp_device = Some(comp_device);
-        self.comp_target = Some(comp_target);
-        self.comp_visual = Some(comp_visual);
-        self.resources = Some(resources);
-    }
-
-    pub fn load_assets(&mut self) {
-        let device = self.device.as_ref().unwrap();
-        let allocator = self.allocator.as_ref().unwrap();
-        let root = {
-            let mut blob = null_mut::<ID3DBlob>();
-            let mut error = null_mut::<ID3DBlob>();
-
-            let desc = D3D12_ROOT_SIGNATURE_DESC {
-                NumParameters: 0,
-                pParameters: null_mut() as _,
-                NumStaticSamplers: 0,
-                pStaticSamplers: null_mut() as _,
-                Flags: 0,
-            };
-            let hr = unsafe {
-                D3D12SerializeRootSignature(
-                    &desc,
-                    D3D_ROOT_SIGNATURE_VERSION_1_0,
-                    &mut blob as _,
-                    &mut error as _,
-                )
-            };
-            if hr > 0 {
-                panic!("Unable to serialize root signature (serialization)");
-            }
-            if !error.is_null() {
-                panic!("Unable to serialize root signature (error blobbie)");
-            }
-            unsafe { ComPtr::from_raw(blob) }
-        };
-
         let root_signature = unsafe {
+            let root = {
+                let mut blob = null_mut::<ID3DBlob>();
+                let mut error = null_mut::<ID3DBlob>();
+
+                let desc = D3D12_ROOT_SIGNATURE_DESC {
+                    NumParameters: 0,
+                    pParameters: null_mut() as _,
+                    NumStaticSamplers: 0,
+                    pStaticSamplers: null_mut() as _,
+                    Flags: 0,
+                };
+                let hr = unsafe {
+                    D3D12SerializeRootSignature(
+                        &desc,
+                        D3D_ROOT_SIGNATURE_VERSION_1_0,
+                        &mut blob as _,
+                        &mut error as _,
+                    )
+                };
+                if hr > 0 {
+                    panic!("Unable to serialize root signature (serialization)");
+                }
+                if !error.is_null() {
+                    panic!("Unable to serialize root signature (error blobbie)");
+                }
+                unsafe { ComPtr::from_raw(blob) }
+            };
             let mut ptr = null_mut::<ID3D12RootSignature>();
             let hr = device.CreateRootSignature(
                 0,
@@ -353,165 +337,6 @@ impl Window {
         }
         .expect("Unable to create root signature");
 
-        // let rtvs = [DXGI_FORMAT_R8G8B8A8_UNORM; 8];
-        // let dummy_target = D3D12_RENDER_TARGET_BLEND_DESC {
-        //     BlendEnable: FALSE,
-        //     LogicOpEnable: FALSE,
-        //     SrcBlend: D3D12_BLEND_ZERO,
-        //     DestBlend: D3D12_BLEND_ZERO,
-        //     BlendOp: D3D12_BLEND_OP_ADD,
-        //     SrcBlendAlpha: D3D12_BLEND_ZERO,
-        //     DestBlendAlpha: D3D12_BLEND_ZERO,
-        //     BlendOpAlpha: D3D12_BLEND_OP_ADD,
-        //     LogicOp: D3D12_LOGIC_OP_CLEAR,
-        //     RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
-        // };
-        // let render_targets = [dummy_target; 8];
-
-        // let input_elements = [D3D12_INPUT_ELEMENT_DESC {
-        //     SemanticName: "COLOR".as_ptr() as *const _,
-        //     SemanticIndex: 0,
-        //     Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
-        //     AlignedByteOffset: 0,
-        //     InputSlot: 0,
-        //     InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-        //     InstanceDataStepRate: 0,
-        // }];
-
-        // let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        //     pRootSignature: root_signature.as_raw(),
-        //     // VS: Shader::from_blob(vs),
-        //     // PS: Shader::from_blob(ps),
-        //     VS: D3D12_SHADER_BYTECODE {
-        //         BytecodeLength: 0,
-        //         pShaderBytecode: ptr::null(),
-        //     },
-        //     PS: D3D12_SHADER_BYTECODE {
-        //         BytecodeLength: 0,
-        //         pShaderBytecode: ptr::null(),
-        //     },
-        //     GS: D3D12_SHADER_BYTECODE {
-        //         BytecodeLength: 0,
-        //         pShaderBytecode: ptr::null(),
-        //     },
-        //     DS: D3D12_SHADER_BYTECODE {
-        //         BytecodeLength: 0,
-        //         pShaderBytecode: ptr::null(),
-        //     },
-        //     HS: D3D12_SHADER_BYTECODE {
-        //         BytecodeLength: 0,
-        //         pShaderBytecode: ptr::null(),
-        //     },
-        //     StreamOutput: D3D12_STREAM_OUTPUT_DESC {
-        //         pSODeclaration: ptr::null(),
-        //         NumEntries: 0,
-        //         pBufferStrides: ptr::null(),
-        //         NumStrides: 0,
-        //         RasterizedStream: 0,
-        //     },
-        //     BlendState: D3D12_BLEND_DESC {
-        //         AlphaToCoverageEnable: FALSE,
-        //         IndependentBlendEnable: FALSE,
-        //         RenderTarget: render_targets,
-        //     },
-        //     SampleMask: !0,
-        //     RasterizerState: D3D12_RASTERIZER_DESC {
-        //         FillMode: D3D12_FILL_MODE_SOLID,
-        //         CullMode: D3D12_CULL_MODE_BACK,
-        //         FrontCounterClockwise: FALSE,
-        //         DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
-        //         DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
-        //         SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
-        //         DepthClipEnable: TRUE,
-        //         MultisampleEnable: FALSE,
-        //         AntialiasedLineEnable: FALSE,
-        //         ForcedSampleCount: 0,
-        //         ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
-        //     },
-        //     DepthStencilState: unsafe { mem::zeroed() },
-        //     InputLayout: D3D12_INPUT_LAYOUT_DESC {
-        //         pInputElementDescs: input_elements.as_ptr(),
-        //         NumElements: input_elements.len() as _,
-        //     },
-        //     IBStripCutValue: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED,
-        //     PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        //     NumRenderTargets: 1,
-        //     RTVFormats: rtvs,
-        //     DSVFormat: DXGI_FORMAT_UNKNOWN,
-        //     SampleDesc: DXGI_SAMPLE_DESC {
-        //         Count: 1,
-        //         Quality: 0,
-        //     },
-        //     NodeMask: 0,
-        //     CachedPSO: D3D12_CACHED_PIPELINE_STATE {
-        //         pCachedBlob: ptr::null(),
-        //         CachedBlobSizeInBytes: 0,
-        //     },
-        //     Flags: D3D12_PIPELINE_STATE_FLAG_NONE,
-        // };
-
-        let input_elements = [D3D12_INPUT_ELEMENT_DESC {
-            SemanticName: "COLOR\0".as_ptr() as *const _,
-            SemanticIndex: 0,
-            Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
-            AlignedByteOffset: 0,
-            InputSlot: 0,
-            InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-            InstanceDataStepRate: 0,
-        }];
-
-        let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-            ..unsafe { mem::zeroed() }
-        };
-        pso_desc.InputLayout = D3D12_INPUT_LAYOUT_DESC {
-            NumElements: input_elements.len() as _,
-            pInputElementDescs: &input_elements as _,
-        };
-        pso_desc.pRootSignature = root_signature.as_raw();
-        pso_desc.RasterizerState = CD3DX12_RASTERIZER_DESC_D3D12_DEFAULT;
-
-        // CD3DX12_BLEND_DESC(D3D12_DEFAULT)
-        pso_desc.BlendState = D3D12_BLEND_DESC {
-            AlphaToCoverageEnable: FALSE,
-            IndependentBlendEnable: FALSE,
-            ..unsafe { mem::zeroed() }
-        };
-        for i in 0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT as usize {
-            pso_desc.BlendState.RenderTarget[i] = D3D12_RENDER_TARGET_BLEND_DESC {
-                BlendEnable: FALSE,
-                LogicOpEnable: FALSE,
-                BlendOp: D3D12_BLEND_OP_ADD,
-                BlendOpAlpha: D3D12_BLEND_OP_ADD,
-                SrcBlend: D3D12_BLEND_ONE,
-                DestBlend: D3D12_BLEND_ONE,
-                DestBlendAlpha: D3D12_BLEND_ZERO,
-                SrcBlendAlpha: D3D12_BLEND_ZERO,
-                LogicOp: D3D12_LOGIC_OP_NOOP,
-                RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
-            }
-        }
-
-        pso_desc.DepthStencilState.DepthEnable = FALSE;
-        pso_desc.DepthStencilState.StencilEnable = FALSE;
-        pso_desc.SampleMask = !0;
-        pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        pso_desc.NumRenderTargets = 1;
-        pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-        pso_desc.SampleDesc.Count = 1;
-
-        // // TODO: WTF
-        // let pipeline = unsafe {
-        //     let mut ptr = null_mut::<ID3D12PipelineState>();
-        //     let hr = device.CreateGraphicsPipelineState(
-        //         &pso_desc,
-        //         &ID3D12PipelineState::uuidof(),
-        //         &mut ptr as *mut *mut _ as *mut *mut _,
-        //     );
-        //     println!("HR {:?}", hr as u32);
-        //     (hr == 0).then(|| ComPtr::from_raw(ptr))
-        // }
-        // .expect("Unable to create root pipeline state");
-
         let list = unsafe {
             let mut ptr = null_mut::<ID3D12GraphicsCommandList>();
             let hr = device.CreateCommandList(
@@ -522,44 +347,61 @@ impl Window {
                 &ID3D12GraphicsCommandList::uuidof(),
                 &mut ptr as *mut *mut _ as *mut *mut _,
             );
-            (hr == 0).then(|| ComPtr::from_raw(ptr))
+            (hr == 0).then(|| {
+                let ptr = ComPtr::from_raw(ptr);
+                ptr.Close();
+                ptr
+            })
         }
         .expect("Unable to create command list");
 
-        if unsafe { list.Close() } > 0 {
-            panic!("Unable to close command list");
+        Window {
+            factory,
+            adapter,
+            device,
+            queue,
+            allocator,
+            comp_device,
+            swap_chain,
+            list,
+            desc_heap,
+            desc_size,
+            comp_target,
+            comp_visual,
+            resources,
+            // pipeline_state: ComPtr<ID3D12PipelineState>,
+            root_signature,
         }
-
-        self.root_signature = Some(root_signature);
-        // self.pipeline_state = Some(pipeline);
-        self.list = Some(list);
     }
 
     pub fn populate_command_list(&mut self) {
-        let allocator = self.allocator.as_ref().unwrap();
-        let list = self.list.as_ref().unwrap();
-        let resources = self.resources.as_ref().unwrap();
-        let swap_chain = self.swap_chain.as_ref().unwrap();
-        let current_frame = unsafe { swap_chain.GetCurrentBackBufferIndex() as usize };
-        let current_resource = &resources[current_frame];
-        let desc_heap = self.desc_heap.as_ref().unwrap();
-        let desc_cpu = unsafe { desc_heap.GetCPUDescriptorHandleForHeapStart() };
-        // let pipeline = self.pipeline_state.as_ref().unwrap();
-        let root_signature = self.root_signature.as_ref().unwrap();
+        let current_frame = unsafe { self.swap_chain.GetCurrentBackBufferIndex() as usize };
+        let current_resource = &self.resources[current_frame];
+        let desc_cpu = unsafe {
+            let mut ptr = self.desc_heap.GetCPUDescriptorHandleForHeapStart();
+            ptr.ptr += current_frame * self.desc_size;
+            ptr
+        };
 
-        if unsafe { allocator.Reset() } != 0 {
+        if unsafe { self.allocator.Reset() } != 0 {
             panic!("allocator reset failed");
         }
 
         // TODO pInitialState: pipeline.as_raw()
         if unsafe {
-            list.Reset(allocator.as_raw(), null_mut() /*pipeline.as_raw()*/)
+            self.list.Reset(
+                self.allocator.as_raw(),
+                null_mut(), /*pipeline.as_raw()*/
+            )
         } > 0
         {
             panic!("Unable to reset list");
         }
 
-        unsafe { list.SetGraphicsRootSignature(root_signature.as_raw()) };
+        unsafe {
+            self.list
+                .SetGraphicsRootSignature(self.root_signature.as_raw())
+        };
 
         // // TODO:
         // let viewport = D3D12_VIEWPORT {
@@ -596,18 +438,18 @@ impl Window {
             }
             [barrier]
         };
-        unsafe { list.ResourceBarrier(1, barriers.as_ptr()) };
+        unsafe { self.list.ResourceBarrier(1, barriers.as_ptr()) };
 
         // TODO:
         // CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvHeap->GetCPUDescriptorHandleForHeapStart(), m_frameIndex, m_rtvDescriptorSize);
 
         // set render targets
         unsafe {
-            list.OMSetRenderTargets(1, &desc_cpu, 0, ptr::null());
+            self.list.OMSetRenderTargets(1, &desc_cpu, 0, ptr::null());
         }
         unsafe {
             let bg: [FLOAT; 4] = [1.0, 0.2, 0.4, 0.5];
-            list.ClearRenderTargetView(desc_cpu, &bg, 0, null());
+            self.list.ClearRenderTargetView(desc_cpu, &bg, 0, null());
         }
 
         // let _descriptor_inc_size = device.get_descriptor_increment_size(DescriptorHeapType::Rtv);
@@ -630,28 +472,26 @@ impl Window {
             }
             [barrier]
         };
-        unsafe { list.ResourceBarrier(1, barriers.as_ptr()) };
+        unsafe { self.list.ResourceBarrier(1, barriers.as_ptr()) };
 
-        if unsafe { list.Close() } > 0 {
+        if unsafe { self.list.Close() } > 0 {
             panic!("Unable to close command list");
         }
     }
 
     pub fn render(&mut self) {
         self.populate_command_list();
-        let queue = self.queue.as_ref().unwrap();
-        let list = self.list.as_ref().unwrap();
-        let swap_chain = self.swap_chain.as_ref().unwrap();
-        let lists = [list.as_raw().cast::<ID3D12CommandList>()];
-        let hr = unsafe {
-            queue.ExecuteCommandLists(lists.len() as _, lists.as_ptr());
-            swap_chain.Present(1, 0)
-        };
-        // TODO: Present fails, probably because of things...
-        // if hr != 0 {
-        //     panic!("Present failed");
-        // }
-        println!("Render");
+        unsafe {
+            let lists = [self.list.as_raw().cast::<ID3D12CommandList>()];
+
+            self.queue
+                .ExecuteCommandLists(lists.len() as _, lists.as_ptr());
+
+            if self.swap_chain.Present(1, 0) != 0 {
+                panic!("Present failed");
+            }
+            println!("Render");
+        }
     }
 }
 
@@ -666,35 +506,18 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     #[allow(non_upper_case_globals)]
-    static mut window: Window = Window {
-        factory: None,
-        adapter: None,
-        device: None,
-        queue: None,
-        allocator: None,
-        list: None,
-        desc_heap: None,
-        desc_size: None,
-        comp_device: None,
-        comp_target: None,
-        comp_visual: None,
-        resources: None,
-        swap_chain: None,
-        // pipeline_state: None,
-        root_signature: None,
-    };
-
+    static mut WINDOW: Option<Window> = None;
     match msg {
         winuser::WM_CREATE => {
-            window.create_drawing_resources(hwnd);
-            window.load_assets();
-            window.render();
+            WINDOW = Some(Window::new(hwnd));
             winuser::DefWindowProcA(hwnd, msg, wparam, lparam)
         }
         winuser::WM_PAINT => {
-            window.render();
-            winuser::DefWindowProcA(hwnd, msg, wparam, lparam)
-            // 0
+            if let Some(window) = WINDOW.as_mut() {
+                window.render();
+            }
+            ValidateRect(hwnd, null());
+            0
         }
         winuser::WM_DESTROY => {
             winuser::PostQuitMessage(0);
