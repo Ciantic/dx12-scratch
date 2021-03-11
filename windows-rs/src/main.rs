@@ -60,7 +60,7 @@ impl Window {
         let device = unsafe {
             let mut ptr: Option<ID3D12Device> = None;
             D3D12CreateDevice(
-                None, //Some(adapter.clone().into()),
+                Some(adapter.clone().into()), // None for default adapter
                 D3D_FEATURE_LEVEL::D3D_FEATURE_LEVEL_11_0,
                 &ID3D12Device::IID,
                 ptr.set_abi(),
