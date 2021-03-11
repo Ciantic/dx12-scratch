@@ -60,7 +60,7 @@ impl Window {
         let device = unsafe {
             let mut ptr: Option<ID3D12Device> = None;
             D3D12CreateDevice(
-                Some(adapter.clone().into()), // None for default adapter
+                &adapter, // None for default adapter
                 D3D_FEATURE_LEVEL::D3D_FEATURE_LEVEL_11_0,
                 &ID3D12Device::IID,
                 ptr.set_abi(),
@@ -118,7 +118,7 @@ impl Window {
             };
             let mut ptr: Option<IDXGISwapChain1> = None;
             factory
-                .CreateSwapChainForComposition(queue.clone(), &desc, None, &mut ptr)
+                .CreateSwapChainForComposition(&queue, &desc, None, &mut ptr)
                 .and_some(ptr)
         }?
         .cast::<IDXGISwapChain3>()?;
@@ -139,8 +139,8 @@ impl Window {
 
         // Set swap_chain and the root visual and commit
         unsafe {
-            comp_visual.SetContent(swap_chain.clone()).ok()?;
-            comp_target.SetRoot(comp_visual.clone()).ok()?;
+            comp_visual.SetContent(&swap_chain).ok()?;
+            comp_target.SetRoot(&comp_visual).ok()?;
             comp_device.Commit().ok()?;
         }
 
@@ -180,7 +180,7 @@ impl Window {
                     //     u: D3D12_RTV_DIMENSION_UNKNOWN as _,
                     //     ViewDimension: 0,
                     // };
-                    device.CreateRenderTargetView(resource.clone(), 0 as _, descriptor.clone());
+                    device.CreateRenderTargetView(&resource, 0 as _, &descriptor);
                     descriptor.ptr += rtv_desc_size;
                 }
 
@@ -237,7 +237,7 @@ impl Window {
                 .CreateCommandList(
                     0,
                     D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT,
-                    allocator.clone(),
+                    &allocator,
                     None,
                     &ID3D12GraphicsCommandList::IID,
                     ptr.set_abi(),
@@ -284,12 +284,12 @@ impl Window {
 
             // Reset list
             self.list_graphics_direct
-                .Reset(self.allocator.clone(), None)
+                .Reset(&self.allocator, None)
                 .ok()?;
 
             // Set root signature
             self.list_graphics_direct
-                .SetGraphicsRootSignature(self.root_signature.clone());
+                .SetGraphicsRootSignature(&self.root_signature);
 
             // Clear view
             self.list_graphics_direct.ClearRenderTargetView(
