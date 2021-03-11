@@ -60,7 +60,7 @@ impl Window {
         let device = unsafe {
             let mut ptr: Option<ID3D12Device> = None;
             D3D12CreateDevice(
-                Some(adapter.clone().into()),
+                None, //Some(adapter.clone().into()),
                 D3D_FEATURE_LEVEL::D3D_FEATURE_LEVEL_11_0,
                 &ID3D12Device::IID,
                 ptr.set_abi(),
@@ -96,8 +96,7 @@ impl Window {
         let comp_device = unsafe {
             let mut ptr: Option<IDCompositionDevice> = None;
             DCompositionCreateDevice(None, &IDCompositionDevice::IID, ptr.set_abi()).and_some(ptr)
-        }
-        .expect("Unable to create composition device");
+        }?;
 
         // Create swap chain for composition
         let swap_chain = unsafe {
@@ -130,15 +129,13 @@ impl Window {
             comp_device
                 .CreateTargetForHwnd(hwnd, BOOL(1), &mut ptr)
                 .and_some(ptr)
-        }
-        .expect("Unable to composition target");
+        }?;
 
         // Create IDCompositionVisual for the window
         let comp_visual = unsafe {
             let mut ptr = None;
             comp_device.CreateVisual(&mut ptr).and_some(ptr)
-        }
-        .expect("Unable to composition visual");
+        }?;
 
         // Set swap_chain and the root visual and commit
         unsafe {
@@ -159,8 +156,7 @@ impl Window {
             device
                 .CreateDescriptorHeap(&desc, &ID3D12DescriptorHeap::IID, ptr.set_abi())
                 .and_some(ptr)
-        }
-        .expect("Unable to create heap descriptor thing");
+        }?;
 
         // Create resource per frame
         let mut descriptor = unsafe { rtv_desc_heap.GetCPUDescriptorHandleForHeapStart() };
@@ -221,8 +217,7 @@ impl Window {
                         panic!("Root signature failed, error blob contains the error")
                     }
                 })
-            }
-            .expect("Root signature serialization failed");
+            }?;
 
             let mut ptr: Option<ID3D12RootSignature> = None;
             device
@@ -234,8 +229,7 @@ impl Window {
                     ptr.set_abi(),
                 )
                 .and_some(ptr)
-        }
-        .expect("Unable to create root signature");
+        }?;
 
         // Create direct command list
         let list_graphics_direct = unsafe {
@@ -254,8 +248,7 @@ impl Window {
                     ptr.Close().unwrap();
                     ptr
                 })
-        }
-        .expect("Unable to create command list");
+        }?;
 
         Ok(Window {
             hwnd,
@@ -276,47 +269,52 @@ impl Window {
         })
     }
 
-    fn populate_command_list(&mut self) {
+    fn populate_command_list(&mut self) -> ::windows::Result<()> {
         unsafe {
             // Get the current backbuffer on which to draw
             let current_frame = self.swap_chain.GetCurrentBackBufferIndex() as usize;
             let _current_resource = &self.resources[current_frame];
-            let current_resource_desc = {
+            let rtv = {
                 let mut ptr = self.rtv_desc_heap.GetCPUDescriptorHandleForHeapStart();
                 ptr.ptr += self.rtv_desc_size * current_frame;
                 ptr
             };
 
-            self.allocator.Reset().unwrap();
+            // Reset allocator
+            self.allocator.Reset().ok()?;
+
+            // Reset list
             self.list_graphics_direct
                 .Reset(self.allocator.clone(), None)
-                .unwrap();
+                .ok()?;
+
+            // Set root signature
             self.list_graphics_direct
                 .SetGraphicsRootSignature(self.root_signature.clone());
 
+            // Clear view
             self.list_graphics_direct.ClearRenderTargetView(
-                current_resource_desc,
+                rtv,
                 [1.0f32, 0.2, 0.4, 0.5].as_ptr(),
                 0,
                 null_mut(),
             );
 
-            self.list_graphics_direct.Close().unwrap();
+            // Close list
+            self.list_graphics_direct.Close().ok()?;
+            Ok(())
         }
     }
 
-    pub fn render(&mut self) {
-        self.populate_command_list();
+    pub fn render(&mut self) -> windows::Result<()> {
+        self.populate_command_list()?;
         unsafe {
-            let mut lists = [Some(
-                self.list_graphics_direct
-                    .cast::<ID3D12CommandList>()
-                    .unwrap(),
-            )];
+            let mut lists = [Some(self.list_graphics_direct.cast::<ID3D12CommandList>()?)];
             self.queue
                 .ExecuteCommandLists(lists.len() as _, lists.as_mut_ptr());
-            self.swap_chain.Present(1, 0).unwrap();
+            self.swap_chain.Present(1, 0).ok()?;
         }
+        Ok(())
     }
 }
 
@@ -331,7 +329,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             }
             WM_PAINT => {
                 if let Some(window) = WINDOW.as_mut() {
-                    window.render();
+                    window.render().unwrap();
                 }
                 ValidateRect(hwnd, std::ptr::null());
                 LRESULT(0)
