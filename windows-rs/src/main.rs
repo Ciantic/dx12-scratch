@@ -139,9 +139,9 @@ impl Window {
 
         // Set swap_chain and the root visual and commit
         unsafe {
-            comp_visual.SetContent(swap_chain.clone()).unwrap();
-            comp_target.SetRoot(comp_visual.clone()).unwrap();
-            comp_device.Commit().unwrap();
+            comp_visual.SetContent(swap_chain.clone()).ok()?;
+            comp_target.SetRoot(comp_visual.clone()).ok()?;
+            comp_device.Commit().ok()?;
         }
 
         // Create descriptor heap for render target views
@@ -172,8 +172,7 @@ impl Window {
                     swap_chain
                         .GetBuffer(i as _, &ID3D12Resource::IID, ptr.set_abi())
                         .and_some(ptr)
-                }
-                .expect("Unable to create resource");
+                }?;
 
                 unsafe {
                     // let desc = D3D12_TEX2D_RTV {
@@ -185,9 +184,9 @@ impl Window {
                     descriptor.ptr += rtv_desc_size;
                 }
 
-                resource
+                Ok(resource)
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>, windows::ErrorCode>>()?
             .try_into()
             .expect("Unable to create resources");
 
