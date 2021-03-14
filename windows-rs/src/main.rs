@@ -1,5 +1,5 @@
 use bindings::{
-    windows::win32::direct3d11::*, windows::win32::direct3d12::*,
+    windows::win32::direct3d11::*, windows::win32::direct3d12::*, windows::win32::direct3d_hlsl::*,
     windows::win32::direct_composition::*, windows::win32::dxgi::*, windows::win32::gdi::*,
     windows::win32::menus_and_resources::*, windows::win32::system_services::*,
     windows::win32::windows_and_messaging::*,
@@ -249,6 +249,77 @@ impl Window {
                 })
         }?;
 
+        // let mut inputElementDescs = [
+        //     D3D12_INPUT_ELEMENT_DESC {
+        //         semantic_name: PSTR("POSITION\0".as_ptr() as _),
+        //         semantic_index: 0,
+        //         format: DXGI_FORMAT::DXGI_FORMAT_R32G32B32_FLOAT,
+        //         input_slot: 0,
+        //         instance_data_step_rate: 0,
+        //         input_slot_class:
+        //             D3D12_INPUT_CLASSIFICATION::D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+        //         aligned_byte_offset: 0,
+        //     },
+        //     D3D12_INPUT_ELEMENT_DESC {
+        //         semantic_name: PSTR("COLOR\0".as_ptr() as _),
+        //         semantic_index: 0,
+        //         format: DXGI_FORMAT::DXGI_FORMAT_R32G32B32A32_FLOAT,
+        //         input_slot: 0,
+        //         instance_data_step_rate: 0,
+        //         input_slot_class:
+        //             D3D12_INPUT_CLASSIFICATION::D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+        //         aligned_byte_offset: 12,
+        //     },
+        // ];
+
+        // let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC::default();
+        // pso_desc.input_layout = D3D12_INPUT_LAYOUT_DESC {
+        //     num_elements: inputElementDescs.len() as u32,
+        //     p_input_element_descs: inputElementDescs.as_mut_ptr(),
+        // };
+        // pso_desc.p_root_signature = Some(root_signature.clone());
+
+        // // CD3DX12_RASTERIZER_DESC( CD3DX12_DEFAULT )
+        // pso_desc.rasterizer_state = D3D12_RASTERIZER_DESC {
+        //     fill_mode: D3D12_FILL_MODE::D3D12_FILL_MODE_SOLID,
+        //     cull_mode: D3D12_CULL_MODE::D3D12_CULL_MODE_BACK,
+        //     front_counter_clockwise: BOOL(0),
+        //     depth_bias: D3D12_DEFAULT_DEPTH_BIAS,
+        //     depth_bias_clamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+        //     slope_scaled_depth_bias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
+        //     depth_clip_enable: BOOL(1),
+        //     multisample_enable: BOOL(0),
+        //     antialiased_line_enable: BOOL(0),
+        //     forced_sample_count: 0,
+        //     conservative_raster:
+        //         D3D12_CONSERVATIVE_RASTERIZATION_MODE::D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+        // };
+
+        // // CD3DX12_BLEND_DESC(D3D12_DEFAULT)
+        // pso_desc.blend_state = D3D12_BLEND_DESC {
+        //     alpha_to_coverage_enable: BOOL(0),
+        //     independent_blend_enable: BOOL(0),
+        //     render_target: // TODO: Windows RS docs says this is not yet supported "render_target: NOT_YET_SUPPORTED_TYPE" https://microsoft.github.io/windows-docs-rs/doc/bindings/windows/win32/direct3d12/struct.D3D12_BLEND_DESC.html
+        // };
+
+        // pso_desc.DepthStencilState.DepthEnable = FALSE;
+        // pso_desc.DepthStencilState.StencilEnable = FALSE;
+        // pso_desc.SampleMask = UINT_MAX;
+        // pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        // pso_desc.NumRenderTargets = 1;
+        // pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        // pso_desc.SampleDesc.Count = 1;
+        // ThrowIfFailed(m_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_pipelineState)));
+        // D3DCompile(p_src_data, src_data_size, p_source_name, p_defines, p_include, p_entrypoint, p_target, flags1, flags2, pp_code, pp_error_msgs)
+
+        // let pipeline_state = unsafe {
+        //     let mut ptr: Option<ID3D12PipelineState> = None;
+        //     device
+        //         .CreateGraphicsPipelineState(&pso_desc, &ID3D12PipelineState::IID, ptr.set_abi())
+        //         .and_some(ptr)
+        // }
+        // .expect("Unable to create pipeline state");
+
         Ok(Window {
             hwnd,
             factory,
@@ -265,6 +336,7 @@ impl Window {
             resources,
             root_signature,
             list_graphics_direct,
+            // pipeline_state,
         })
     }
 

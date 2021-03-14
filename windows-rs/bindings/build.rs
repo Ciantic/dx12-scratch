@@ -1,6 +1,7 @@
 fn main() {
     windows::build!(
         windows::win32::direct3d12::*,
+        windows::win32::direct3d_hlsl::*,
         windows::win32::dxgi::*,
         windows::win32::gdi::ValidateRect,
         windows::win32::menus_and_resources::{LoadCursorA, HMENU},

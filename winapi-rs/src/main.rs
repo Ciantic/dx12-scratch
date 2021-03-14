@@ -1,7 +1,10 @@
-use core::mem::MaybeUninit;
+use core::{mem::MaybeUninit, num};
 use ptr::{null, null_mut};
-use std::{convert::TryInto, mem, ptr};
-use winapi::shared::dxgi::*;
+use std::{
+    convert::TryInto,
+    mem::{self, zeroed},
+    ptr,
+};
 use winapi::shared::dxgi1_2::*;
 use winapi::shared::dxgi1_3::*;
 use winapi::shared::dxgi1_4::*;
@@ -16,6 +19,7 @@ use winapi::um::dcomp::*;
 use winapi::um::unknwnbase::IUnknown;
 use winapi::um::winuser;
 use winapi::Interface;
+use winapi::{shared::dxgi::*, vc::limits::UINT_MAX};
 use wio::com::ComPtr;
 
 const NUM_OF_FRAMES: usize = 2;
@@ -309,12 +313,12 @@ impl Window {
                     pParameters: null_mut() as _,
                     NumStaticSamplers: 0,
                     pStaticSamplers: null_mut() as _,
-                    Flags: 0,
+                    Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
                 };
 
                 if D3D12SerializeRootSignature(
                     &desc,
-                    D3D_ROOT_SIGNATURE_VERSION_1_0,
+                    D3D_ROOT_SIGNATURE_VERSION_1,
                     &mut blob as _,
                     &mut error as _,
                 ) != 0
@@ -339,6 +343,106 @@ impl Window {
             (hr == 0).then(|| ComPtr::from_raw(ptr))
         }
         .expect("Unable to create root signature");
+
+        // Pipeline state
+
+        let mut els = [
+            D3D12_INPUT_ELEMENT_DESC {
+                SemanticName: "POSITION\0".as_ptr() as _,
+                SemanticIndex: 0,
+                Format: DXGI_FORMAT_R32G32B32_FLOAT,
+                InputSlot: 0,
+                InstanceDataStepRate: 0,
+                InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+                AlignedByteOffset: 0,
+            },
+            D3D12_INPUT_ELEMENT_DESC {
+                SemanticName: "COLOR\0".as_ptr() as _,
+                SemanticIndex: 0,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                InputSlot: 0,
+                InstanceDataStepRate: 0,
+                InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+                AlignedByteOffset: 12,
+            },
+        ];
+        let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+            pRootSignature: root_signature.as_raw(),
+            InputLayout: D3D12_INPUT_LAYOUT_DESC {
+                NumElements: els.len() as u32,
+                pInputElementDescs: els.as_mut_ptr(),
+            },
+            // CD3DX12_RASTERIZER_DESC( CD3DX12_DEFAULT )
+            RasterizerState: D3D12_RASTERIZER_DESC {
+                FillMode: D3D12_FILL_MODE_SOLID,
+                CullMode: D3D12_CULL_MODE_BACK,
+                FrontCounterClockwise: FALSE,
+                DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
+                DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+                SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
+                DepthClipEnable: TRUE,
+                MultisampleEnable: FALSE,
+                AntialiasedLineEnable: FALSE,
+                ForcedSampleCount: 0,
+                ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+            },
+            // CD3DX12_BLEND_DESC(D3D12_DEFAULT)
+            BlendState: D3D12_BLEND_DESC {
+                AlphaToCoverageEnable: FALSE,
+                IndependentBlendEnable: FALSE,
+                RenderTarget: {
+                    (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
+                        .map(|_| D3D12_RENDER_TARGET_BLEND_DESC {
+                            BlendEnable: FALSE,
+                            LogicOpEnable: FALSE,
+                            DestBlend: D3D12_BLEND_ZERO,
+                            SrcBlend: D3D12_BLEND_ZERO,
+                            DestBlendAlpha: D3D12_BLEND_ONE,
+                            SrcBlendAlpha: D3D12_BLEND_ONE,
+                            BlendOp: D3D12_BLEND_OP_ADD,
+                            LogicOp: D3D12_LOGIC_OP_NOOP,
+                            BlendOpAlpha: D3D12_BLEND_OP_ADD,
+                            RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
+                        })
+                        .collect::<Vec<_>>()
+                        .as_slice()
+                        .try_into()
+                        .unwrap()
+                },
+            },
+            DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
+                DepthEnable: FALSE,
+                StencilEnable: FALSE,
+
+                ..unsafe { mem::zeroed() }
+            },
+            SampleMask: UINT_MAX,
+            PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            NumRenderTargets: 1,
+            RTVFormats: {
+                (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
+                    .map(|_| DXGI_FORMAT_B8G8R8A8_UNORM)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap()
+            },
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            ..unsafe { std::mem::zeroed() }
+        };
+
+        // let pipeline_state = unsafe {
+        //     let mut ptr = null_mut::<ID3D12PipelineState>();
+        //     let hr = device.CreateGraphicsPipelineState(
+        //         &pso_desc,
+        //         &ID3D12RootSignature::uuidof(),
+        //         &mut ptr as *mut *mut _ as *mut *mut _,
+        //     );
+        //     (hr == 0).then(|| ComPtr::from_raw(ptr))
+        // }
+        // .expect("Unable to create pipeline state");
 
         let list = unsafe {
             let mut ptr = null_mut::<ID3D12GraphicsCommandList>();
