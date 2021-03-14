@@ -1,10 +1,6 @@
-use core::{mem::MaybeUninit, num};
+use core::mem::MaybeUninit;
 use ptr::{null, null_mut};
-use std::{
-    convert::TryInto,
-    mem::{self, zeroed},
-    ptr,
-};
+use std::{convert::TryInto, ffi::CString, mem, ptr};
 use winapi::shared::dxgi1_2::*;
 use winapi::shared::dxgi1_3::*;
 use winapi::shared::dxgi1_4::*;
@@ -15,8 +11,11 @@ use winapi::shared::windef::*;
 use winapi::um::d3d12::*;
 use winapi::um::d3d12sdklayers::*;
 use winapi::um::d3dcommon::*;
+use winapi::um::d3dcompiler::*;
 use winapi::um::dcomp::*;
-use winapi::um::unknwnbase::IUnknown;
+use winapi::um::synchapi::*;
+use winapi::um::winbase::*;
+use winapi::um::winnt::*;
 use winapi::um::winuser;
 use winapi::Interface;
 use winapi::{shared::dxgi::*, vc::limits::UINT_MAX};
@@ -53,8 +52,12 @@ struct Window {
     comp_target: ComPtr<IDCompositionTarget>,
     comp_visual: ComPtr<IDCompositionVisual>,
     resources: [ComPtr<ID3D12Resource>; NUM_OF_FRAMES],
-    // pipeline_state: ComPtr<ID3D12PipelineState>,
+    pipeline_state: ComPtr<ID3D12PipelineState>,
     root_signature: ComPtr<ID3D12RootSignature>,
+    vertex_shader: ComPtr<ID3DBlob>,
+    fence: ComPtr<ID3D12Fence>,
+    fence_value: u64,
+    fence_event: HANDLE,
 }
 
 // fn hr(hresult: HRESULT, ptr: *mut *mut c_void)  -> ComPtr<T>
@@ -64,19 +67,21 @@ impl Window {
     pub fn new(hwnd: HWND) -> Self {
         println!("HWND {}", hwnd as u32);
 
-        // let debug = unsafe {
-        //     let mut ptr = null_mut::<ID3D12Debug>();
-        //     let hr = D3D12GetDebugInterface(
-        //         &ID3D12Debug::uuidof(),
-        //         &mut ptr as *mut *mut _ as *mut *mut _,
-        //     );
-        //     (hr == 0).then(|| ComPtr::from_raw(ptr))
-        // }
-        // .expect("Unable to create debug layer");
+        // Start "DebugView" to listen errors
+        // https://docs.microsoft.com/en-us/sysinternals/downloads/debugview
+        let debug = unsafe {
+            let mut ptr = null_mut::<ID3D12Debug>();
+            let hr = D3D12GetDebugInterface(
+                &ID3D12Debug::uuidof(),
+                &mut ptr as *mut *mut _ as *mut *mut _,
+            );
+            (hr == 0).then(|| ComPtr::from_raw(ptr))
+        }
+        .expect("Unable to create debug layer");
 
-        // unsafe {
-        //     debug.EnableDebugLayer();
-        // }
+        unsafe {
+            debug.EnableDebugLayer();
+        }
 
         // Create Factory4
         let factory = unsafe {
@@ -104,7 +109,7 @@ impl Window {
         let device = unsafe {
             let mut ptr = null_mut::<ID3D12Device>();
             let hr = D3D12CreateDevice(
-                &*(adapter.as_raw() as *mut IUnknown) as *const _ as *mut _,
+                adapter.as_raw() as *mut _,
                 D3D_FEATURE_LEVEL_11_0,
                 &ID3D12Device::uuidof(),
                 &mut ptr as *mut *mut _ as *mut *mut _,
@@ -318,7 +323,7 @@ impl Window {
 
                 if D3D12SerializeRootSignature(
                     &desc,
-                    D3D_ROOT_SIGNATURE_VERSION_1,
+                    D3D_ROOT_SIGNATURE_VERSION_1_0,
                     &mut blob as _,
                     &mut error as _,
                 ) != 0
@@ -345,8 +350,34 @@ impl Window {
         .expect("Unable to create root signature");
 
         // Pipeline state
+        // TODO: How long should this vertex_shader blob be alive?
+        let vertex_shader = unsafe {
+            let data = include_bytes!("./simple.hlsl");
+            let mut err = null_mut::<ID3DBlob>();
+            let mut ptr = null_mut::<ID3DBlob>();
+            let hr = D3DCompile(
+                data.as_ptr() as LPCVOID,
+                data.len(),
+                "simple.hlsl\0".as_ptr() as _,
+                null(),
+                null_mut(),
+                "vs_main\0".as_ptr() as _,
+                "vs_5_0\0".as_ptr() as _,
+                0,
+                0,
+                &mut ptr,
+                &mut err,
+            );
+            if !err.is_null() {
+                let err = ComPtr::from_raw(err);
+                let errstr = CString::from_raw(err.GetBufferPointer() as _);
+                panic!("Shader creation failed {}", errstr.to_string_lossy());
+            }
+            (hr == 0).then(|| ComPtr::from_raw(ptr))
+        }
+        .expect("Could not create vertex shader");
 
-        let mut els = [
+        let els = [
             D3D12_INPUT_ELEMENT_DESC {
                 SemanticName: "POSITION\0".as_ptr() as _,
                 SemanticIndex: 0,
@@ -370,7 +401,7 @@ impl Window {
             pRootSignature: root_signature.as_raw(),
             InputLayout: D3D12_INPUT_LAYOUT_DESC {
                 NumElements: els.len() as u32,
-                pInputElementDescs: els.as_mut_ptr(),
+                pInputElementDescs: els.as_ptr(),
             },
             // CD3DX12_RASTERIZER_DESC( CD3DX12_DEFAULT )
             RasterizerState: D3D12_RASTERIZER_DESC {
@@ -410,18 +441,46 @@ impl Window {
                         .unwrap()
                 },
             },
+            VS: D3D12_SHADER_BYTECODE {
+                BytecodeLength: unsafe { vertex_shader.GetBufferSize() },
+                pShaderBytecode: unsafe { vertex_shader.GetBufferPointer() },
+            },
             DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-                DepthEnable: FALSE,
-                StencilEnable: FALSE,
-
                 ..unsafe { mem::zeroed() }
             },
+            // CD3DX12_DEPTH_STENCIL_DESC( CD3DX12_DEFAULT )
+            // DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
+            //     DepthEnable: TRUE,
+            //     DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
+            //     DepthFunc: D3D12_COMPARISON_FUNC_LESS,
+            //     StencilEnable: FALSE,
+            //     StencilReadMask: D3D12_DEFAULT_STENCIL_READ_MASK as _,
+            //     StencilWriteMask: D3D12_DEFAULT_STENCIL_WRITE_MASK as _,
+            //     FrontFace: D3D12_DEPTH_STENCILOP_DESC {
+            //         StencilDepthFailOp: D3D12_STENCIL_OP_KEEP,
+            //         StencilFailOp: D3D12_STENCIL_OP_KEEP,
+            //         StencilPassOp: D3D12_STENCIL_OP_KEEP,
+            //         StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS,
+            //     },
+            //     BackFace: D3D12_DEPTH_STENCILOP_DESC {
+            //         StencilDepthFailOp: D3D12_STENCIL_OP_KEEP,
+            //         StencilFailOp: D3D12_STENCIL_OP_KEEP,
+            //         StencilPassOp: D3D12_STENCIL_OP_KEEP,
+            //         StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS,
+            //     },
+            // },
             SampleMask: UINT_MAX,
             PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
             NumRenderTargets: 1,
             RTVFormats: {
                 (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
-                    .map(|_| DXGI_FORMAT_B8G8R8A8_UNORM)
+                    .map(|i| {
+                        if i == 0 {
+                            DXGI_FORMAT_R8G8B8A8_UNORM
+                        } else {
+                            DXGI_FORMAT_UNKNOWN
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap()
@@ -430,27 +489,33 @@ impl Window {
                 Count: 1,
                 Quality: 0,
             },
+            DSVFormat: DXGI_FORMAT_UNKNOWN,
+            // GS: D3D12_SHADER_BYTECODE
+            // StreamOutput:
             ..unsafe { std::mem::zeroed() }
         };
 
-        // let pipeline_state = unsafe {
-        //     let mut ptr = null_mut::<ID3D12PipelineState>();
-        //     let hr = device.CreateGraphicsPipelineState(
-        //         &pso_desc,
-        //         &ID3D12RootSignature::uuidof(),
-        //         &mut ptr as *mut *mut _ as *mut *mut _,
-        //     );
-        //     (hr == 0).then(|| ComPtr::from_raw(ptr))
-        // }
-        // .expect("Unable to create pipeline state");
+        // Create graphics pipeline state
+        let pipeline_state = unsafe {
+            let mut ptr = null_mut::<ID3D12PipelineState>();
+            let hr = device.CreateGraphicsPipelineState(
+                &pso_desc,
+                &ID3D12PipelineState::uuidof(),
+                &mut ptr as *mut *mut _ as *mut *mut _,
+            );
+            println!("{}", hr as u32);
+            (hr == 0).then(|| ComPtr::from_raw(ptr))
+        }
+        .expect("Unable to create pipeline state");
 
+        // Create command list
         let list = unsafe {
             let mut ptr = null_mut::<ID3D12GraphicsCommandList>();
             let hr = device.CreateCommandList(
                 0,
                 D3D12_COMMAND_LIST_TYPE_DIRECT,
                 allocator.as_raw(),
-                null_mut(), //pipeline.as_raw(),
+                pipeline_state.as_raw(),
                 &ID3D12GraphicsCommandList::uuidof(),
                 &mut ptr as *mut *mut _ as *mut *mut _,
             );
@@ -461,6 +526,25 @@ impl Window {
             })
         }
         .expect("Unable to create command list");
+
+        // Create fence
+        let (fence, fence_value, fence_event) = unsafe {
+            let mut fence = null_mut::<ID3D12Fence>();
+            let hr = device.CreateFence(
+                0,
+                D3D12_FENCE_FLAG_NONE,
+                &ID3D12Fence::uuidof(),
+                &mut fence as *mut *mut _ as *mut *mut _,
+            );
+            let fence_event = CreateEventA(null_mut(), FALSE, FALSE, null());
+            if hr != 0 {
+                panic!("Unable to create fence")
+            }
+            if fence_event.is_null() {
+                panic!("Unable to create fence event");
+            }
+            (ComPtr::from_raw(fence), 0, fence_event)
+        };
 
         Window {
             factory,
@@ -476,8 +560,12 @@ impl Window {
             comp_target,
             comp_visual,
             resources,
-            // pipeline_state: ComPtr<ID3D12PipelineState>,
+            pipeline_state,
             root_signature,
+            vertex_shader,
+            fence,
+            fence_event,
+            fence_value,
         }
     }
 
@@ -496,10 +584,8 @@ impl Window {
 
         // TODO pInitialState: pipeline.as_raw()
         if unsafe {
-            self.list.Reset(
-                self.allocator.as_raw(),
-                null_mut(), /*pipeline.as_raw()*/
-            )
+            self.list
+                .Reset(self.allocator.as_raw(), self.pipeline_state.as_raw())
         } > 0
         {
             panic!("Unable to reset list");
@@ -586,6 +672,20 @@ impl Window {
         }
     }
 
+    pub fn wait_for_previous_frame(&mut self) {
+        // This is bad practice says Microsoft's C++ example
+        unsafe {
+            let old_fence_value = self.fence_value;
+            self.queue.Signal(self.fence.as_raw(), old_fence_value);
+            self.fence_value += 1;
+            if self.fence.GetCompletedValue() < old_fence_value {
+                self.fence
+                    .SetEventOnCompletion(old_fence_value, self.fence_event);
+                WaitForSingleObject(self.fence_event, INFINITE);
+            }
+        }
+    }
+
     pub fn render(&mut self) {
         self.populate_command_list();
         unsafe {
@@ -598,6 +698,8 @@ impl Window {
                 panic!("Present failed");
             }
             println!("Render");
+
+            self.wait_for_previous_frame();
         }
     }
 }

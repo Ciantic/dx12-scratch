@@ -14,4 +14,4 @@ version = "0.3"
 features = ["dxgi1_2","dxgi1_3","dxgi1_4","dxgidebug","d3d12","d3d12sdklayers","d3dcommon","d3dcompiler","dxgiformat","dcomp","synchapi","winerror",
 
 	# For window creation
-	"winuser","minwindef","windef"]
+	"winuser","minwindef","windef","winbase"]
