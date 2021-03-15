@@ -365,8 +365,6 @@ impl Window {
         }
         .expect("Unable to create root signature");
 
-        // Pipeline state
-        // TODO: How long should this vertex_shader blob be alive?
         let vertex_shader = unsafe {
             let data = include_bytes!("./simple.hlsl");
             let mut err = null_mut::<ID3DBlob>();
@@ -418,6 +416,8 @@ impl Window {
             (hr == 0).then(|| ComPtr::from_raw(ptr))
         }
         .expect("Could not create vertex shader");
+
+        // Pipeline state
         let els = [
             D3D12_INPUT_ELEMENT_DESC {
                 SemanticName: "POSITION\0".as_ptr() as _,
@@ -769,7 +769,6 @@ impl Window {
                 .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             self.list.IASetVertexBuffers(0, 1, &self.vertex_buffer_view);
             self.list.DrawInstanced(3, 1, 0, 0);
-            // TODO: Where is the triangle?
         }
 
         let barriers = {
