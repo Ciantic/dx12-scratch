@@ -1,6 +1,16 @@
+/// This roughly replicates
+/// https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Samples/Desktop/D3D12HelloWorld/src/HelloTriangle/D3D12HelloTriangle.cpp
+///
+/// Includes some changes what I want e.g. transparency
+///
 use core::mem::MaybeUninit;
 use ptr::{null, null_mut};
-use std::{convert::TryInto, ffi::CString, mem, ptr};
+use std::{
+    convert::TryInto,
+    ffi::{c_void, CString},
+    mem, ptr,
+};
+use winapi::shared::dxgi::*;
 use winapi::shared::dxgi1_2::*;
 use winapi::shared::dxgi1_3::*;
 use winapi::shared::dxgi1_4::*;
@@ -14,28 +24,24 @@ use winapi::um::d3dcommon::*;
 use winapi::um::d3dcompiler::*;
 use winapi::um::dcomp::*;
 use winapi::um::synchapi::*;
-use winapi::um::winbase::*;
 use winapi::um::winnt::*;
 use winapi::um::winuser;
+use winapi::vc::limits::UINT_MAX;
 use winapi::Interface;
-use winapi::{shared::dxgi::*, vc::limits::UINT_MAX};
 use wio::com::ComPtr;
 
 const NUM_OF_FRAMES: usize = 2;
 
-// const CD3DX12_RASTERIZER_DESC_D3D12_DEFAULT: D3D12_RASTERIZER_DESC = D3D12_RASTERIZER_DESC {
-//     FillMode: D3D12_FILL_MODE_SOLID,
-//     CullMode: D3D12_CULL_MODE_BACK,
-//     FrontCounterClockwise: FALSE,
-//     DepthBias: D3D12_DEFAULT_DEPTH_BIAS as _,
-//     DepthBiasClamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
-//     SlopeScaledDepthBias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
-//     DepthClipEnable: TRUE,
-//     MultisampleEnable: FALSE,
-//     AntialiasedLineEnable: FALSE,
-//     ForcedSampleCount: 0,
-//     ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
-// };
+#[repr(C)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+impl Vertex {
+    const fn new(position: [f32; 3], color: [f32; 4]) -> Self {
+        Self { position, color }
+    }
+}
 
 #[allow(dead_code)]
 struct Window {
@@ -55,9 +61,16 @@ struct Window {
     pipeline_state: ComPtr<ID3D12PipelineState>,
     root_signature: ComPtr<ID3D12RootSignature>,
     vertex_shader: ComPtr<ID3DBlob>,
+    viewport: D3D12_VIEWPORT,
+
+    // Synchronization
     fence: ComPtr<ID3D12Fence>,
     fence_value: u64,
     fence_event: HANDLE,
+
+    // Resources
+    vertex_buffer: ComPtr<ID3D12Resource>,
+    vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
 }
 
 // fn hr(hresult: HRESULT, ptr: *mut *mut c_void)  -> ComPtr<T>
@@ -527,6 +540,16 @@ impl Window {
         }
         .expect("Unable to create command list");
 
+        // Viewport
+        let viewport = D3D12_VIEWPORT {
+            Width: 1024.0,
+            Height: 1024.0,
+            MaxDepth: D3D12_MAX_DEPTH,
+            MinDepth: D3D12_MIN_DEPTH,
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+        };
+
         // Create fence
         let (fence, fence_value, fence_event) = unsafe {
             let mut fence = null_mut::<ID3D12Fence>();
@@ -544,6 +567,80 @@ impl Window {
                 panic!("Unable to create fence event");
             }
             (ComPtr::from_raw(fence), 0, fence_event)
+        };
+
+        let (vertex_buffer, vertex_buffer_view) = unsafe {
+            let ar = 1.0;
+            let triangle: [Vertex; 3] = [
+                Vertex::new([0.0, 0.25 * ar, 0.0], [1.0, 0.0, 0.0, 1.0]),
+                Vertex::new([0.25, -0.25 * ar, 0.0], [0.0, 1.0, 0.0, 1.0]),
+                Vertex::new([-0.25, -0.25 * ar, 0.0], [0.0, 0.0, 1.0, 1.0]),
+            ];
+            let triangle_size = mem::size_of::<Vertex>() * triangle.len();
+            let props = D3D12_HEAP_PROPERTIES {
+                Type: D3D12_HEAP_TYPE_UPLOAD,
+                CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                CreationNodeMask: 1,
+                VisibleNodeMask: 1,
+                MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            };
+            let desc = D3D12_RESOURCE_DESC {
+                Alignment: 0,
+                Flags: D3D12_RESOURCE_FLAG_NONE,
+                Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                DepthOrArraySize: 1,
+                Format: DXGI_FORMAT_UNKNOWN,
+                Height: 1,
+                Width: triangle_size as u64,
+                Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                MipLevels: 1,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+            };
+            // let clr = D3D12_CLEAR_VALUE {
+            //     Format: DXGI_FORMAT_UNKNOWN,
+
+            // };
+            let mut ptr = null_mut::<ID3D12Resource>();
+            let hr = device.CreateCommittedResource(
+                &props,
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                null(),
+                &ID3D12Resource::uuidof(),
+                &mut ptr as *mut *mut _ as *mut *mut _,
+            );
+            if hr != 0 {
+                panic!("Unable to create triangle resource");
+            }
+            let vertex_buffer = ComPtr::from_raw(ptr);
+            let mut data = null_mut::<*const u8>();
+            if vertex_buffer.Map(
+                0,
+                &D3D12_RANGE { Begin: 0, End: 0 },
+                &mut data as *mut *mut _ as *mut *mut _,
+            ) != 0
+            {
+                panic!("Unable to map vertex data");
+            }
+            if data.is_null() {
+                panic!("Nullptr");
+            }
+            std::ptr::copy_nonoverlapping(
+                triangle.as_ptr() as *const u8,
+                data as *mut _,
+                triangle_size,
+            );
+            vertex_buffer.Unmap(0, null());
+            let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+                BufferLocation: vertex_buffer.GetGPUVirtualAddress(),
+                StrideInBytes: mem::size_of::<Vertex>() as _,
+                SizeInBytes: triangle_size as _,
+            };
+            (vertex_buffer, vertex_buffer_view)
         };
 
         Window {
@@ -566,6 +663,9 @@ impl Window {
             fence,
             fence_event,
             fence_value,
+            viewport,
+            vertex_buffer,
+            vertex_buffer_view,
         }
     }
 
@@ -582,38 +682,27 @@ impl Window {
             panic!("allocator reset failed");
         }
 
-        // TODO pInitialState: pipeline.as_raw()
         if unsafe {
             self.list
                 .Reset(self.allocator.as_raw(), self.pipeline_state.as_raw())
-        } > 0
+        } != 0
         {
             panic!("Unable to reset list");
         }
 
         unsafe {
             self.list
-                .SetGraphicsRootSignature(self.root_signature.as_raw())
+                .SetGraphicsRootSignature(self.root_signature.as_raw());
+
+            self.list.RSSetViewports(1, &self.viewport);
+            let rects = D3D12_RECT {
+                top: 0,
+                left: 0,
+                bottom: 1024,
+                right: 1024,
+            };
+            self.list.RSSetScissorRects(1, &rects);
         };
-
-        // // TODO:
-        // let viewport = D3D12_VIEWPORT {
-        //     ..unsafe { mem::zeroed() }
-        // };
-        // unsafe {
-        //     list.RSSetViewports(1, &viewport);
-        // }
-
-        // let scrects = D3D12_RECT {
-        //     ..unsafe { mem::zeroed() }
-        // };
-        // unsafe {
-        //     list.RSSetScissorRects(1, &scrects);
-        // };
-        // list.set_graphics_root_shader_resource_view()
-        // m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
-        // m_commandList->RSSetViewports(1, &m_viewport);
-        // m_commandList->RSSetScissorRects(1, &m_scissorRect);
 
         let barriers = {
             let mut barrier = D3D12_RESOURCE_BARRIER {
@@ -633,21 +722,17 @@ impl Window {
         };
         unsafe { self.list.ResourceBarrier(1, barriers.as_ptr()) };
 
-        // TODO:
-        // CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvHeap->GetCPUDescriptorHandleForHeapStart(), m_frameIndex, m_rtvDescriptorSize);
-
         // set render targets
         unsafe {
             self.list.OMSetRenderTargets(1, &desc_cpu, 0, ptr::null());
-        }
-        unsafe {
             let bg: [FLOAT; 4] = [1.0, 0.2, 0.4, 0.5];
             self.list.ClearRenderTargetView(desc_cpu, &bg, 0, null());
+            self.list
+                .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            self.list.IASetVertexBuffers(0, 1, &self.vertex_buffer_view);
+            self.list.DrawInstanced(3, 1, 0, 0);
+            // TODO: Where is the triangle?
         }
-
-        // let _descriptor_inc_size = device.get_descriptor_increment_size(DescriptorHeapType::Rtv);
-        // // let oo = heap.GetCPUDescriptorHandleForHeapStart();
-        // list.ClearRenderTargetView(RenderTargetView, ColorRGBA, NumRects, pRects)
 
         let barriers = {
             let mut barrier = D3D12_RESOURCE_BARRIER {
@@ -681,7 +766,7 @@ impl Window {
             if self.fence.GetCompletedValue() < old_fence_value {
                 self.fence
                     .SetEventOnCompletion(old_fence_value, self.fence_event);
-                WaitForSingleObject(self.fence_event, INFINITE);
+                WaitForSingleObject(self.fence_event, 0xFFFFFFFF);
             }
         }
     }
@@ -698,9 +783,8 @@ impl Window {
                 panic!("Present failed");
             }
             println!("Render");
-
-            self.wait_for_previous_frame();
         }
+        self.wait_for_previous_frame();
     }
 }
 
