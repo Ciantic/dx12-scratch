@@ -611,12 +611,13 @@ impl Window {
         };
 
         let (vertex_buffer, vertex_buffer_view) = unsafe {
+            // Blue end of the triangle is semi transparent
             let ar = 1.0;
             let scale = 1.0;
             let cpu_triangle: [Vertex; 3] = [
                 Vertex::new([0.0, scale * ar, 0.0], [1.0, 0.0, 0.0, 1.0]),
                 Vertex::new([scale, -scale * ar, 0.0], [0.0, 1.0, 0.0, 1.0]),
-                Vertex::new([-scale, -scale * ar, 0.0], [0.0, 0.0, 1.0, 1.0]),
+                Vertex::new([-scale, -scale * ar, 0.0], [0.0, 0.0, 1.0, 0.5]),
             ];
             let triangle_size_bytes = mem::size_of_val(&cpu_triangle);
             let props = D3D12_HEAP_PROPERTIES {
