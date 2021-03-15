@@ -612,10 +612,11 @@ impl Window {
 
         let (vertex_buffer, vertex_buffer_view) = unsafe {
             let ar = 1.0;
+            let scale = 1.0;
             let cpu_triangle: [Vertex; 3] = [
-                Vertex::new([0.0, 0.25 * ar, 0.0], [1.0, 0.0, 0.0, 1.0]),
-                Vertex::new([0.25, -0.25 * ar, 0.0], [0.0, 1.0, 0.0, 1.0]),
-                Vertex::new([-0.25, -0.25 * ar, 0.0], [0.0, 0.0, 1.0, 1.0]),
+                Vertex::new([0.0, scale * ar, 0.0], [1.0, 0.0, 0.0, 1.0]),
+                Vertex::new([scale, -scale * ar, 0.0], [0.0, 1.0, 0.0, 1.0]),
+                Vertex::new([-scale, -scale * ar, 0.0], [0.0, 0.0, 1.0, 1.0]),
             ];
             let triangle_size_bytes = mem::size_of_val(&cpu_triangle);
             let props = D3D12_HEAP_PROPERTIES {
@@ -858,6 +859,7 @@ unsafe extern "system" fn wndproc(
 
 fn main() {
     unsafe {
+        winuser::SetThreadDpiAwarenessContext(2 as _); // DPI_AWARENESS_PER_MONITOR_AWARE;
         let cls = winuser::WNDCLASSA {
             style: 0,
             lpfnWndProc: Some(wndproc),
