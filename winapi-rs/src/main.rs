@@ -32,6 +32,7 @@ use wio::com::ComPtr;
 
 const NUM_OF_FRAMES: usize = 2;
 
+#[derive(Debug)]
 #[repr(C)]
 struct Vertex {
     position: [f32; 3],
@@ -61,7 +62,9 @@ struct Window {
     pipeline_state: ComPtr<ID3D12PipelineState>,
     root_signature: ComPtr<ID3D12RootSignature>,
     vertex_shader: ComPtr<ID3DBlob>,
+    pixel_shader: ComPtr<ID3DBlob>,
     viewport: D3D12_VIEWPORT,
+    scissor: D3D12_RECT,
 
     // Synchronization
     fence: ComPtr<ID3D12Fence>,
@@ -390,6 +393,31 @@ impl Window {
         }
         .expect("Could not create vertex shader");
 
+        let pixel_shader = unsafe {
+            let data = include_bytes!("./simple.hlsl");
+            let mut err = null_mut::<ID3DBlob>();
+            let mut ptr = null_mut::<ID3DBlob>();
+            let hr = D3DCompile(
+                data.as_ptr() as LPCVOID,
+                data.len(),
+                "simple.hlsl\0".as_ptr() as _,
+                null(),
+                null_mut(),
+                "ps_main\0".as_ptr() as _,
+                "ps_5_0\0".as_ptr() as _,
+                0,
+                0,
+                &mut ptr,
+                &mut err,
+            );
+            if !err.is_null() {
+                let err = ComPtr::from_raw(err);
+                let errstr = CString::from_raw(err.GetBufferPointer() as _);
+                panic!("Shader creation failed {}", errstr.to_string_lossy());
+            }
+            (hr == 0).then(|| ComPtr::from_raw(ptr))
+        }
+        .expect("Could not create vertex shader");
         let els = [
             D3D12_INPUT_ELEMENT_DESC {
                 SemanticName: "POSITION\0".as_ptr() as _,
@@ -403,7 +431,7 @@ impl Window {
             D3D12_INPUT_ELEMENT_DESC {
                 SemanticName: "COLOR\0".as_ptr() as _,
                 SemanticIndex: 0,
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
                 InputSlot: 0,
                 InstanceDataStepRate: 0,
                 InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
@@ -458,7 +486,13 @@ impl Window {
                 BytecodeLength: unsafe { vertex_shader.GetBufferSize() },
                 pShaderBytecode: unsafe { vertex_shader.GetBufferPointer() },
             },
+            PS: D3D12_SHADER_BYTECODE {
+                BytecodeLength: unsafe { pixel_shader.GetBufferSize() },
+                pShaderBytecode: unsafe { pixel_shader.GetBufferPointer() },
+            },
             DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
+                DepthEnable: FALSE,
+                StencilEnable: FALSE,
                 ..unsafe { mem::zeroed() }
             },
             // CD3DX12_DEPTH_STENCIL_DESC( CD3DX12_DEFAULT )
@@ -550,6 +584,13 @@ impl Window {
             TopLeftY: 0.0,
         };
 
+        let scissor = D3D12_RECT {
+            top: 0,
+            left: 0,
+            bottom: 1024,
+            right: 1024,
+        };
+
         // Create fence
         let (fence, fence_value, fence_event) = unsafe {
             let mut fence = null_mut::<ID3D12Fence>();
@@ -571,12 +612,12 @@ impl Window {
 
         let (vertex_buffer, vertex_buffer_view) = unsafe {
             let ar = 1.0;
-            let triangle: [Vertex; 3] = [
+            let cpu_triangle: [Vertex; 3] = [
                 Vertex::new([0.0, 0.25 * ar, 0.0], [1.0, 0.0, 0.0, 1.0]),
                 Vertex::new([0.25, -0.25 * ar, 0.0], [0.0, 1.0, 0.0, 1.0]),
                 Vertex::new([-0.25, -0.25 * ar, 0.0], [0.0, 0.0, 1.0, 1.0]),
             ];
-            let triangle_size = mem::size_of::<Vertex>() * triangle.len();
+            let triangle_size_bytes = mem::size_of_val(&cpu_triangle);
             let props = D3D12_HEAP_PROPERTIES {
                 Type: D3D12_HEAP_TYPE_UPLOAD,
                 CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
@@ -591,7 +632,7 @@ impl Window {
                 DepthOrArraySize: 1,
                 Format: DXGI_FORMAT_UNKNOWN,
                 Height: 1,
-                Width: triangle_size as u64,
+                Width: triangle_size_bytes as u64,
                 Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                 MipLevels: 1,
                 SampleDesc: DXGI_SAMPLE_DESC {
@@ -617,28 +658,27 @@ impl Window {
                 panic!("Unable to create triangle resource");
             }
             let vertex_buffer = ComPtr::from_raw(ptr);
-            let mut data = null_mut::<*const u8>();
+            let mut gpu_triangle = null_mut::<Vertex>();
             if vertex_buffer.Map(
                 0,
                 &D3D12_RANGE { Begin: 0, End: 0 },
-                &mut data as *mut *mut _ as *mut *mut _,
+                &mut gpu_triangle as *mut *mut _ as *mut *mut _,
             ) != 0
             {
                 panic!("Unable to map vertex data");
             }
-            if data.is_null() {
+            if gpu_triangle.is_null() {
                 panic!("Nullptr");
             }
-            std::ptr::copy_nonoverlapping(
-                triangle.as_ptr() as *const u8,
-                data as *mut _,
-                triangle_size,
-            );
+            std::ptr::copy_nonoverlapping(cpu_triangle.as_ptr(), gpu_triangle as *mut _, 3);
+            let gpu_slice = std::slice::from_raw_parts(gpu_triangle, 3);
+            println!("{:?}", cpu_triangle);
+            println!("{:?}", gpu_slice);
             vertex_buffer.Unmap(0, null());
             let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
                 BufferLocation: vertex_buffer.GetGPUVirtualAddress(),
                 StrideInBytes: mem::size_of::<Vertex>() as _,
-                SizeInBytes: triangle_size as _,
+                SizeInBytes: triangle_size_bytes as _,
             };
             (vertex_buffer, vertex_buffer_view)
         };
@@ -660,10 +700,12 @@ impl Window {
             pipeline_state,
             root_signature,
             vertex_shader,
+            pixel_shader,
             fence,
             fence_event,
             fence_value,
             viewport,
+            scissor,
             vertex_buffer,
             vertex_buffer_view,
         }
@@ -695,13 +737,7 @@ impl Window {
                 .SetGraphicsRootSignature(self.root_signature.as_raw());
 
             self.list.RSSetViewports(1, &self.viewport);
-            let rects = D3D12_RECT {
-                top: 0,
-                left: 0,
-                bottom: 1024,
-                right: 1024,
-            };
-            self.list.RSSetScissorRects(1, &rects);
+            self.list.RSSetScissorRects(1, &self.scissor);
         };
 
         let barriers = {
