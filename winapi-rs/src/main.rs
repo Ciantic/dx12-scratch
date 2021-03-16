@@ -523,7 +523,7 @@ impl Window {
                 (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
                     .map(|i| {
                         if i == 0 {
-                            DXGI_FORMAT_R8G8B8A8_UNORM
+                            DXGI_FORMAT_B8G8R8A8_UNORM
                         } else {
                             DXGI_FORMAT_UNKNOWN
                         }
