@@ -731,7 +731,7 @@ fn main() {
             PSTR(b"CompositionCls\0".as_ptr() as _),
             PSTR(b"Composition example\0".as_ptr() as _),
             WINDOWS_STYLE::WS_OVERLAPPEDWINDOW | WINDOWS_STYLE::WS_VISIBLE,
-            -2147483648 as _,
+            -2147483648 as _, // Where is CW_USEDEFAULT? I just hardcoded the value
             -2147483648 as _,
             -2147483648 as _,
             -2147483648 as _,
