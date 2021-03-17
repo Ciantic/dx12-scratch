@@ -57,6 +57,8 @@ struct Window {
 
 impl Window {
     pub fn new(hwnd: HWND) -> windows::Result<Self> {
+        // Start "DebugView" to listen errors
+        // https://docs.microsoft.com/en-us/sysinternals/downloads/debugview
         let debug = unsafe {
             let mut ptr: Option<ID3D12Debug> = None;
             D3D12GetDebugInterface(&ID3D12Debug::IID, ptr.set_abi()).and_some(ptr)
