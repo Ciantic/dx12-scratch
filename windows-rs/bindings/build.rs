@@ -4,15 +4,16 @@ fn main() {
         windows::win32::direct3d_hlsl::*,
         windows::win32::dxgi::*,
         windows::win32::gdi::ValidateRect,
-        windows::win32::menus_and_resources::{LoadCursorA, HMENU},
-        windows::win32::system_services::{
-            GetModuleHandleA, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HINSTANCE, IDC_ARROW, LRESULT, WM_CREATE,
-            WM_DESTROY, WM_PAINT, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_EX_NOREDIRECTIONBITMAP
-        },
+        windows::win32::menus_and_resources::{HMENU, HICON},
         windows::win32::windows_and_messaging::{
             CreateWindowExA, DefWindowProcA, DispatchMessageA, GetMessageA, PostQuitMessage,
             TranslateMessage,
-            RegisterClassA, HWND, LPARAM, MSG, WNDCLASSA, WPARAM,
+            RegisterClassA, LoadCursorA, HWND, LPARAM, MSG, WNDCLASSA, WPARAM,
+            IDC_ARROW, WM_CREATE,
+            WM_DESTROY, WM_PAINT, WINDOWS_STYLE, WINDOWS_EX_STYLE
+        },
+        windows::win32::system_services::{
+            GetModuleHandleA, HINSTANCE, LRESULT, WINDOWSCLASS_STYLES
         },
         windows::win32::direct_composition::{IDCompositionDevice, IDCompositionTarget, IDCompositionVisual, DCompositionCreateDevice}
     );

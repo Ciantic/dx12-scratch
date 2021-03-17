@@ -249,57 +249,73 @@ impl Window {
                 })
         }?;
 
-        // let mut inputElementDescs = [
-        //     D3D12_INPUT_ELEMENT_DESC {
-        //         semantic_name: PSTR("POSITION\0".as_ptr() as _),
-        //         semantic_index: 0,
-        //         format: DXGI_FORMAT::DXGI_FORMAT_R32G32B32_FLOAT,
-        //         input_slot: 0,
-        //         instance_data_step_rate: 0,
-        //         input_slot_class:
-        //             D3D12_INPUT_CLASSIFICATION::D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-        //         aligned_byte_offset: 0,
-        //     },
-        //     D3D12_INPUT_ELEMENT_DESC {
-        //         semantic_name: PSTR("COLOR\0".as_ptr() as _),
-        //         semantic_index: 0,
-        //         format: DXGI_FORMAT::DXGI_FORMAT_R32G32B32A32_FLOAT,
-        //         input_slot: 0,
-        //         instance_data_step_rate: 0,
-        //         input_slot_class:
-        //             D3D12_INPUT_CLASSIFICATION::D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-        //         aligned_byte_offset: 12,
-        //     },
-        // ];
+        let mut inputElementDescs = [
+            D3D12_INPUT_ELEMENT_DESC {
+                semantic_name: PSTR("POSITION\0".as_ptr() as _),
+                semantic_index: 0,
+                format: DXGI_FORMAT::DXGI_FORMAT_R32G32B32_FLOAT,
+                input_slot: 0,
+                instance_data_step_rate: 0,
+                input_slot_class:
+                    D3D12_INPUT_CLASSIFICATION::D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+                aligned_byte_offset: 0,
+            },
+            D3D12_INPUT_ELEMENT_DESC {
+                semantic_name: PSTR("COLOR\0".as_ptr() as _),
+                semantic_index: 0,
+                format: DXGI_FORMAT::DXGI_FORMAT_R32G32B32A32_FLOAT,
+                input_slot: 0,
+                instance_data_step_rate: 0,
+                input_slot_class:
+                    D3D12_INPUT_CLASSIFICATION::D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+                aligned_byte_offset: 12,
+            },
+        ];
 
-        // let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC::default();
-        // pso_desc.input_layout = D3D12_INPUT_LAYOUT_DESC {
-        //     num_elements: inputElementDescs.len() as u32,
-        //     p_input_element_descs: inputElementDescs.as_mut_ptr(),
-        // };
-        // pso_desc.p_root_signature = Some(root_signature.clone());
+        let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC::default();
+        pso_desc.input_layout = D3D12_INPUT_LAYOUT_DESC {
+            num_elements: inputElementDescs.len() as u32,
+            p_input_element_descs: inputElementDescs.as_mut_ptr(),
+        };
+        pso_desc.p_root_signature = Some(root_signature.clone());
 
-        // // CD3DX12_RASTERIZER_DESC( CD3DX12_DEFAULT )
-        // pso_desc.rasterizer_state = D3D12_RASTERIZER_DESC {
-        //     fill_mode: D3D12_FILL_MODE::D3D12_FILL_MODE_SOLID,
-        //     cull_mode: D3D12_CULL_MODE::D3D12_CULL_MODE_BACK,
-        //     front_counter_clockwise: BOOL(0),
-        //     depth_bias: D3D12_DEFAULT_DEPTH_BIAS,
-        //     depth_bias_clamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
-        //     slope_scaled_depth_bias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
-        //     depth_clip_enable: BOOL(1),
-        //     multisample_enable: BOOL(0),
-        //     antialiased_line_enable: BOOL(0),
-        //     forced_sample_count: 0,
-        //     conservative_raster:
-        //         D3D12_CONSERVATIVE_RASTERIZATION_MODE::D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
-        // };
+        // CD3DX12_RASTERIZER_DESC( CD3DX12_DEFAULT )
+        pso_desc.rasterizer_state = D3D12_RASTERIZER_DESC {
+            fill_mode: D3D12_FILL_MODE::D3D12_FILL_MODE_SOLID,
+            cull_mode: D3D12_CULL_MODE::D3D12_CULL_MODE_BACK,
+            front_counter_clockwise: BOOL(0),
+            depth_bias: D3D12_DEFAULT_DEPTH_BIAS as _,
+            depth_bias_clamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+            slope_scaled_depth_bias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
+            depth_clip_enable: BOOL(1),
+            multisample_enable: BOOL(0),
+            antialiased_line_enable: BOOL(0),
+            forced_sample_count: 0,
+            conservative_raster:
+                D3D12_CONSERVATIVE_RASTERIZATION_MODE::D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+        };
 
         // // CD3DX12_BLEND_DESC(D3D12_DEFAULT)
         // pso_desc.blend_state = D3D12_BLEND_DESC {
         //     alpha_to_coverage_enable: BOOL(0),
         //     independent_blend_enable: BOOL(0),
-        //     render_target: // TODO: Windows RS docs says this is not yet supported "render_target: NOT_YET_SUPPORTED_TYPE" https://microsoft.github.io/windows-docs-rs/doc/bindings/windows/win32/direct3d12/struct.D3D12_BLEND_DESC.html
+        //     render_target: (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
+        //         .map(|_| D3D12_RENDER_TARGET_BLEND_DESC {
+        //             BlendEnable: FALSE,
+        //             LogicOpEnable: FALSE,
+        //             DestBlend: D3D12_BLEND_ZERO,
+        //             SrcBlend: D3D12_BLEND_ZERO,
+        //             DestBlendAlpha: D3D12_BLEND_ONE,
+        //             SrcBlendAlpha: D3D12_BLEND_ONE,
+        //             BlendOp: D3D12_BLEND_OP_ADD,
+        //             LogicOp: D3D12_LOGIC_OP_NOOP,
+        //             BlendOpAlpha: D3D12_BLEND_OP_ADD,
+        //             RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
+        //         })
+        //         .collect::<Vec<_>>()
+        //         .as_slice()
+        //         .try_into()
+        //         .unwrap(),
         // };
 
         // pso_desc.DepthStencilState.DepthEnable = FALSE;
@@ -393,7 +409,7 @@ impl Window {
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         static mut WINDOW: Option<Window> = None;
-        match msg as i32 {
+        match msg {
             WM_CREATE => {
                 WINDOW = Some(Window::new(hwnd).unwrap());
                 DefWindowProcA(hwnd, msg, wparam, lparam)
@@ -432,14 +448,14 @@ fn main() {
         };
         RegisterClassA(&cls);
         let hwnd = CreateWindowExA(
-            WS_EX_NOREDIRECTIONBITMAP as _,
+            WINDOWS_EX_STYLE::WS_EX_NOREDIRECTIONBITMAP as _,
             PSTR(b"CompositionCls\0".as_ptr() as _),
             PSTR(b"Composition example\0".as_ptr() as _),
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            WINDOWS_STYLE::WS_OVERLAPPEDWINDOW | WINDOWS_STYLE::WS_VISIBLE,
+            -2147483648 as _,
+            -2147483648 as _,
+            -2147483648 as _,
+            -2147483648 as _,
             HWND(0),
             HMENU(0),
             instance,
