@@ -850,6 +850,7 @@ unsafe extern "system" fn wndproc(
             0
         }
         winuser::WM_DESTROY => {
+            WINDOW = None;
             winuser::PostQuitMessage(0);
             0
         }

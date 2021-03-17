@@ -701,6 +701,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 LRESULT(0)
             }
             WM_DESTROY => {
+                WINDOW = None;
                 PostQuitMessage(0);
                 LRESULT(0)
             }
