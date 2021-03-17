@@ -1,14 +1,26 @@
 use bindings::{
     windows::win32::direct3d11::*, windows::win32::direct3d12::*, windows::win32::direct3d_hlsl::*,
-    windows::win32::direct_composition::*, windows::win32::dxgi::*, windows::win32::gdi::*,
-    windows::win32::menus_and_resources::*, windows::win32::system_services::*,
-    windows::win32::windows_and_messaging::*,
+    windows::win32::direct_composition::*, windows::win32::display_devices::*,
+    windows::win32::dxgi::*, windows::win32::gdi::*, windows::win32::menus_and_resources::*,
+    windows::win32::system_services::*, windows::win32::windows_and_messaging::*,
 };
-use std::convert::TryInto;
 use std::ptr::null_mut;
+use std::{convert::TryInto, ffi::CString};
 use windows::{Abi, Interface};
 
 const NUM_OF_FRAMES: usize = 2;
+
+#[derive(Debug)]
+#[repr(C)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+impl Vertex {
+    const fn new(position: [f32; 3], color: [f32; 4]) -> Self {
+        Self { position, color }
+    }
+}
 
 #[allow(dead_code)]
 struct Window {
@@ -26,23 +38,34 @@ struct Window {
     rtv_desc_size: usize,
     resources: [ID3D12Resource; NUM_OF_FRAMES],
     root_signature: ID3D12RootSignature,
-    list_graphics_direct: ID3D12GraphicsCommandList,
-    // resources: Vec<ID3D12Resource>,
-    // pipeline_state: ID3D12PipelineState,
-    // root_signature: ID3D12RootSignature,
+    list: ID3D12GraphicsCommandList,
+    vertex_shader: ID3DBlob,
+    pixel_shader: ID3DBlob,
+    pipeline_state: ID3D12PipelineState,
+    viewport: D3D12_VIEWPORT,
+    scissor: RECT,
+
+    // Synchronization
+    fence: ID3D12Fence,
+    fence_value: u64,
+    fence_event: HANDLE,
+
+    // Resources
+    vertex_buffer: ID3D12Resource,
+    vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
 }
 
 impl Window {
     pub fn new(hwnd: HWND) -> windows::Result<Self> {
-        // let debug = unsafe {
-        //     let mut ptr: Option<ID3D12Debug> = None;
-        //     D3D12GetDebugInterface(&ID3D12Debug::IID, ptr.set_abi()).and_some(ptr)
-        // }
-        // .expect("Unable to create debug layer");
+        let debug = unsafe {
+            let mut ptr: Option<ID3D12Debug> = None;
+            D3D12GetDebugInterface(&ID3D12Debug::IID, ptr.set_abi()).and_some(ptr)
+        }
+        .expect("Unable to create debug layer");
 
-        // unsafe {
-        //     debug.EnableDebugLayer();
-        // }
+        unsafe {
+            debug.EnableDebugLayer();
+        }
 
         let factory = unsafe {
             let mut ptr: Option<IDXGIFactory4> = None;
@@ -201,7 +224,7 @@ impl Window {
                     p_parameters: null_mut() as _,
                     num_static_samplers: 0,
                     p_static_samplers: null_mut() as _,
-                    flags: D3D12_ROOT_SIGNATURE_FLAGS::D3D12_ROOT_SIGNATURE_FLAG_NONE,
+                    flags: D3D12_ROOT_SIGNATURE_FLAGS::D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
                 };
                 D3D12SerializeRootSignature(
                     &desc,
@@ -230,26 +253,69 @@ impl Window {
                 .and_some(ptr)
         }?;
 
-        // Create direct command list
-        let list_graphics_direct = unsafe {
-            let mut ptr: Option<ID3D12GraphicsCommandList> = None;
-            device
-                .CreateCommandList(
-                    0,
-                    D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT,
-                    &allocator,
-                    None,
-                    &ID3D12GraphicsCommandList::IID,
-                    ptr.set_abi(),
-                )
-                .and_then(|| {
-                    let ptr = ptr.unwrap();
-                    ptr.Close().unwrap();
-                    ptr
-                })
-        }?;
+        let vertex_shader = unsafe {
+            let data = include_bytes!("./simple.hlsl");
+            let mut err: Option<ID3DBlob> = None;
+            let mut ptr: Option<ID3DBlob> = None;
 
-        let mut inputElementDescs = [
+            D3DCompile(
+                data.as_ptr() as *mut _,
+                data.len(),
+                PSTR("simple.hlsl\0".as_ptr() as _),
+                null_mut(),
+                None,
+                PSTR("VSMain\0".as_ptr() as _),
+                PSTR("vs_5_0\0".as_ptr() as _),
+                0,
+                0,
+                &mut ptr,
+                &mut err,
+            )
+            .ok()?;
+
+            match ptr {
+                Some(v) => v,
+                None => {
+                    panic!(
+                        "Shader creation failed with error {}",
+                        CString::from_raw(err.unwrap().GetBufferPointer() as _).to_string_lossy()
+                    )
+                }
+            }
+        };
+
+        let pixel_shader = unsafe {
+            let data = include_bytes!("./simple.hlsl");
+            let mut err: Option<ID3DBlob> = None;
+            let mut ptr: Option<ID3DBlob> = None;
+
+            D3DCompile(
+                data.as_ptr() as *mut _,
+                data.len(),
+                PSTR("simple.hlsl\0".as_ptr() as _),
+                null_mut(),
+                None,
+                PSTR("PSMain\0".as_ptr() as _),
+                PSTR("ps_5_0\0".as_ptr() as _),
+                0,
+                0,
+                &mut ptr,
+                &mut err,
+            )
+            .ok()?;
+
+            match ptr {
+                Some(v) => v,
+                None => {
+                    panic!(
+                        "Shader creation failed with error {}",
+                        CString::from_raw(err.unwrap().GetBufferPointer() as _).to_string_lossy()
+                    )
+                }
+            }
+        };
+
+        let mut els = [
             D3D12_INPUT_ELEMENT_DESC {
                 semantic_name: PSTR("POSITION\0".as_ptr() as _),
                 semantic_index: 0,
@@ -272,69 +338,219 @@ impl Window {
             },
         ];
 
-        let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC::default();
-        pso_desc.input_layout = D3D12_INPUT_LAYOUT_DESC {
-            num_elements: inputElementDescs.len() as u32,
-            p_input_element_descs: inputElementDescs.as_mut_ptr(),
+        let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+            // TODO: Can I get rid of this clone? Or do I even have to?
+            p_root_signature: Some(root_signature.clone()),
+            // unsafe { std::mem::transmute(root_signature.abi()) },
+            input_layout: D3D12_INPUT_LAYOUT_DESC {
+                num_elements: els.len() as u32,
+                p_input_element_descs: els.as_mut_ptr(),
+            },
+            vs: D3D12_SHADER_BYTECODE {
+                bytecode_length: unsafe { vertex_shader.GetBufferSize() },
+                p_shader_bytecode: unsafe { vertex_shader.GetBufferPointer() },
+            },
+            ps: D3D12_SHADER_BYTECODE {
+                bytecode_length: unsafe { pixel_shader.GetBufferSize() },
+                p_shader_bytecode: unsafe { pixel_shader.GetBufferPointer() },
+            },
+            // CD3DX12_RASTERIZER_DESC( CD3DX12_DEFAULT )
+            rasterizer_state: D3D12_RASTERIZER_DESC {
+                fill_mode: D3D12_FILL_MODE::D3D12_FILL_MODE_SOLID,
+                cull_mode: D3D12_CULL_MODE::D3D12_CULL_MODE_BACK,
+                front_counter_clockwise: BOOL(0),
+                depth_bias: D3D12_DEFAULT_DEPTH_BIAS as _,
+                depth_bias_clamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
+                slope_scaled_depth_bias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
+                depth_clip_enable: BOOL(1),
+                multisample_enable: BOOL(0),
+                antialiased_line_enable: BOOL(0),
+                forced_sample_count: 0,
+                conservative_raster:
+                    D3D12_CONSERVATIVE_RASTERIZATION_MODE::D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+            },
+            // CD3DX12_BLEND_DESC(D3D12_DEFAULT)
+            blend_state: D3D12_BLEND_DESC {
+                alpha_to_coverage_enable: BOOL(0),
+                independent_blend_enable: BOOL(0),
+                render_target: (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
+                    .map(|_| D3D12_RENDER_TARGET_BLEND_DESC {
+                        blend_enable: false.into(),
+                        logic_op_enable: false.into(),
+                        dest_blend: D3D12_BLEND::D3D12_BLEND_ZERO,
+                        src_blend: D3D12_BLEND::D3D12_BLEND_ZERO,
+                        dest_blend_alpha: D3D12_BLEND::D3D12_BLEND_ONE,
+                        src_blend_alpha: D3D12_BLEND::D3D12_BLEND_ONE,
+                        blend_op: D3D12_BLEND_OP::D3D12_BLEND_OP_ADD,
+                        logic_op: D3D12_LOGIC_OP::D3D12_LOGIC_OP_NOOP,
+                        blend_op_alpha: D3D12_BLEND_OP::D3D12_BLEND_OP_ADD,
+                        render_target_write_mask:
+                            D3D12_COLOR_WRITE_ENABLE::D3D12_COLOR_WRITE_ENABLE_ALL.0 as _,
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice()
+                    .try_into()
+                    .unwrap(),
+            },
+            sample_mask: 0xffffffff,
+            primitive_topology_type:
+                D3D12_PRIMITIVE_TOPOLOGY_TYPE::D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            num_render_targets: 1,
+            rtv_formats: (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
+                .map(|i| {
+                    if i == 0 {
+                        DXGI_FORMAT::DXGI_FORMAT_B8G8R8A8_UNORM
+                    } else {
+                        DXGI_FORMAT::DXGI_FORMAT_UNKNOWN
+                    }
+                })
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+            sample_desc: DXGI_SAMPLE_DESC {
+                count: 1,
+                quality: 0,
+            },
+            ..D3D12_GRAPHICS_PIPELINE_STATE_DESC::default()
         };
-        pso_desc.p_root_signature = Some(root_signature.clone());
 
-        // CD3DX12_RASTERIZER_DESC( CD3DX12_DEFAULT )
-        pso_desc.rasterizer_state = D3D12_RASTERIZER_DESC {
-            fill_mode: D3D12_FILL_MODE::D3D12_FILL_MODE_SOLID,
-            cull_mode: D3D12_CULL_MODE::D3D12_CULL_MODE_BACK,
-            front_counter_clockwise: BOOL(0),
-            depth_bias: D3D12_DEFAULT_DEPTH_BIAS as _,
-            depth_bias_clamp: D3D12_DEFAULT_DEPTH_BIAS_CLAMP,
-            slope_scaled_depth_bias: D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS,
-            depth_clip_enable: BOOL(1),
-            multisample_enable: BOOL(0),
-            antialiased_line_enable: BOOL(0),
-            forced_sample_count: 0,
-            conservative_raster:
-                D3D12_CONSERVATIVE_RASTERIZATION_MODE::D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+        let pipeline_state = unsafe {
+            let mut ptr: Option<ID3D12PipelineState> = None;
+            device
+                .CreateGraphicsPipelineState(&pso_desc, &ID3D12PipelineState::IID, ptr.set_abi())
+                .and_some(ptr)
+        }
+        .expect("Unable to create pipeline state");
+
+        // Create direct command list
+        let list = unsafe {
+            let mut ptr: Option<ID3D12GraphicsCommandList> = None;
+            device
+                .CreateCommandList(
+                    0,
+                    D3D12_COMMAND_LIST_TYPE::D3D12_COMMAND_LIST_TYPE_DIRECT,
+                    &allocator,
+                    &pipeline_state,
+                    &ID3D12GraphicsCommandList::IID,
+                    ptr.set_abi(),
+                )
+                .and_then(|| {
+                    let ptr = ptr.unwrap();
+                    ptr.Close().unwrap();
+                    ptr
+                })
+        }?;
+
+        // Create fence
+        let (fence, fence_value, fence_event) = unsafe {
+            let mut ptr: Option<ID3D12Fence> = None;
+            let fence = device
+                .CreateFence(
+                    0,
+                    D3D12_FENCE_FLAGS::D3D12_FENCE_FLAG_NONE,
+                    &ID3D12Fence::IID,
+                    ptr.set_abi(),
+                )
+                .and_some(ptr)?;
+            let fence_event = CreateEventA(null_mut(), false, false, PSTR(null_mut()));
+            if fence_event.0 == 0 {
+                panic!("Unable to create fence event");
+            }
+            (fence, 0, fence_event)
         };
 
-        // // CD3DX12_BLEND_DESC(D3D12_DEFAULT)
-        // pso_desc.blend_state = D3D12_BLEND_DESC {
-        //     alpha_to_coverage_enable: BOOL(0),
-        //     independent_blend_enable: BOOL(0),
-        //     render_target: (0..D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
-        //         .map(|_| D3D12_RENDER_TARGET_BLEND_DESC {
-        //             BlendEnable: FALSE,
-        //             LogicOpEnable: FALSE,
-        //             DestBlend: D3D12_BLEND_ZERO,
-        //             SrcBlend: D3D12_BLEND_ZERO,
-        //             DestBlendAlpha: D3D12_BLEND_ONE,
-        //             SrcBlendAlpha: D3D12_BLEND_ONE,
-        //             BlendOp: D3D12_BLEND_OP_ADD,
-        //             LogicOp: D3D12_LOGIC_OP_NOOP,
-        //             BlendOpAlpha: D3D12_BLEND_OP_ADD,
-        //             RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as _,
-        //         })
-        //         .collect::<Vec<_>>()
-        //         .as_slice()
-        //         .try_into()
-        //         .unwrap(),
-        // };
+        let (vertex_buffer, vertex_buffer_view) = unsafe {
+            // Blue end of the triangle is semi transparent
+            let ar = 1.0;
+            let scale = 1.0;
+            let cpu_triangle: [Vertex; 3] = [
+                Vertex::new([0.0, scale * ar, 0.0], [1.0, 0.0, 0.0, 1.0]),
+                Vertex::new([scale, -scale * ar, 0.0], [0.0, 1.0, 0.0, 1.0]),
+                Vertex::new([-scale, -scale * ar, 0.0], [0.0, 0.0, 1.0, 0.5]),
+            ];
+            let triangle_size_bytes = std::mem::size_of_val(&cpu_triangle);
+            let props = D3D12_HEAP_PROPERTIES {
+                r#type: D3D12_HEAP_TYPE::D3D12_HEAP_TYPE_UPLOAD,
+                cpu_page_property: D3D12_CPU_PAGE_PROPERTY::D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                creation_node_mask: 1,
+                visible_node_mask: 1,
+                memory_pool_preference: D3D12_MEMORY_POOL::D3D12_MEMORY_POOL_UNKNOWN,
+            };
+            let desc = D3D12_RESOURCE_DESC {
+                alignment: 0,
+                flags: D3D12_RESOURCE_FLAGS::D3D12_RESOURCE_FLAG_NONE,
+                dimension: D3D12_RESOURCE_DIMENSION::D3D12_RESOURCE_DIMENSION_BUFFER,
+                depth_or_array_size: 1,
+                format: DXGI_FORMAT::DXGI_FORMAT_UNKNOWN,
+                height: 1,
+                width: triangle_size_bytes as u64,
+                layout: D3D12_TEXTURE_LAYOUT::D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                mip_levels: 1,
+                sample_desc: DXGI_SAMPLE_DESC {
+                    count: 1,
+                    quality: 0,
+                },
+            };
+            // let clr = D3D12_CLEAR_VALUE {
+            //     Format: DXGI_FORMAT_UNKNOWN,
 
-        // pso_desc.DepthStencilState.DepthEnable = FALSE;
-        // pso_desc.DepthStencilState.StencilEnable = FALSE;
-        // pso_desc.SampleMask = UINT_MAX;
-        // pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        // pso_desc.NumRenderTargets = 1;
-        // pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-        // pso_desc.SampleDesc.Count = 1;
-        // ThrowIfFailed(m_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_pipelineState)));
-        // D3DCompile(p_src_data, src_data_size, p_source_name, p_defines, p_include, p_entrypoint, p_target, flags1, flags2, pp_code, pp_error_msgs)
+            // };
+            let mut ptr: Option<ID3D12Resource> = None;
+            let vertex_buffer = device
+                .CreateCommittedResource(
+                    &props,
+                    D3D12_HEAP_FLAGS::D3D12_HEAP_FLAG_NONE,
+                    &desc,
+                    D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_GENERIC_READ,
+                    null_mut(),
+                    &ID3D12Resource::IID,
+                    ptr.set_abi(),
+                )
+                .and_some(ptr)?;
 
-        // let pipeline_state = unsafe {
-        //     let mut ptr: Option<ID3D12PipelineState> = None;
-        //     device
-        //         .CreateGraphicsPipelineState(&pso_desc, &ID3D12PipelineState::IID, ptr.set_abi())
-        //         .and_some(ptr)
-        // }
-        // .expect("Unable to create pipeline state");
+            let mut gpu_triangle = null_mut::<Vertex>();
+            vertex_buffer
+                .Map(
+                    0,
+                    &D3D12_RANGE { begin: 0, end: 0 },
+                    &mut gpu_triangle as *mut *mut _ as *mut *mut _,
+                )
+                .ok()?;
+
+            if gpu_triangle.is_null() {
+                panic!("Nullptr");
+            }
+            std::ptr::copy_nonoverlapping(cpu_triangle.as_ptr(), gpu_triangle as *mut _, 3);
+
+            // Debug, if you want to see what was copied
+            // let gpu_slice = std::slice::from_raw_parts(gpu_triangle, 3);
+            // println!("{:?}", cpu_triangle);
+            // println!("{:?}", gpu_slice);
+
+            vertex_buffer.Unmap(0, null_mut());
+            let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+                buffer_location: vertex_buffer.GetGPUVirtualAddress(),
+                stride_in_bytes: std::mem::size_of::<Vertex>() as _,
+                size_in_bytes: triangle_size_bytes as _,
+            };
+            (vertex_buffer, vertex_buffer_view)
+        };
+
+        let viewport = D3D12_VIEWPORT {
+            width: 1024.0,
+            height: 1024.0,
+            max_depth: D3D12_MAX_DEPTH,
+            min_depth: D3D12_MIN_DEPTH,
+            top_leftx: 0.0,
+            top_lefty: 0.0,
+        };
+
+        let scissor = RECT {
+            top: 0,
+            left: 0,
+            bottom: 1024,
+            right: 1024,
+        };
 
         Ok(Window {
             hwnd,
@@ -351,8 +567,17 @@ impl Window {
             rtv_desc_size,
             resources,
             root_signature,
-            list_graphics_direct,
-            // pipeline_state,
+            list,
+            pipeline_state,
+            vertex_shader,
+            pixel_shader,
+            viewport,
+            scissor,
+            fence,
+            fence_event,
+            fence_value,
+            vertex_buffer,
+            vertex_buffer_view,
         })
     }
 
@@ -360,7 +585,7 @@ impl Window {
         unsafe {
             // Get the current backbuffer on which to draw
             let current_frame = self.swap_chain.GetCurrentBackBufferIndex() as usize;
-            let _current_resource = &self.resources[current_frame];
+            let current_resource = &self.resources[current_frame];
             let rtv = {
                 let mut ptr = self.rtv_desc_heap.GetCPUDescriptorHandleForHeapStart();
                 ptr.ptr += self.rtv_desc_size * current_frame;
@@ -371,24 +596,77 @@ impl Window {
             self.allocator.Reset().ok()?;
 
             // Reset list
-            self.list_graphics_direct
-                .Reset(&self.allocator, None)
+            self.list
+                .Reset(&self.allocator, &self.pipeline_state)
                 .ok()?;
 
-            // Set root signature
-            self.list_graphics_direct
-                .SetGraphicsRootSignature(&self.root_signature);
+            // Set root signature, viewport and scissor rect
+            self.list.SetGraphicsRootSignature(&self.root_signature);
+            self.list.RSSetViewports(1, &self.viewport);
+            self.list.RSSetScissorRects(1, &self.scissor);
 
-            // Clear view
-            self.list_graphics_direct.ClearRenderTargetView(
-                rtv,
-                [1.0f32, 0.2, 0.4, 0.5].as_ptr(),
-                0,
-                null_mut(),
+            // Direct the draw commands to the render target resource
+            let barriers = {
+                let mut barrier = D3D12_RESOURCE_BARRIER {
+                    r#type: D3D12_RESOURCE_BARRIER_TYPE::D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                    flags: D3D12_RESOURCE_BARRIER_FLAGS::D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                    ..std::mem::zeroed()
+                };
+                barrier.anonymous.transition.subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                barrier.anonymous.transition.p_resource = current_resource.abi();
+                barrier.anonymous.transition.state_before =
+                    D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_PRESENT;
+                barrier.anonymous.transition.state_after =
+                    D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_RENDER_TARGET;
+                [barrier]
+            };
+            self.list.ResourceBarrier(1, barriers.as_ptr());
+
+            self.list.OMSetRenderTargets(1, &rtv, false, null_mut());
+
+            self.list
+                .ClearRenderTargetView(rtv, [1.0f32, 0.2, 0.4, 0.5].as_ptr(), 0, null_mut());
+            self.list.IASetPrimitiveTopology(
+                D3D_PRIMITIVE_TOPOLOGY::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
+            self.list.IASetVertexBuffers(0, 1, &self.vertex_buffer_view);
+            self.list.DrawInstanced(3, 1, 0, 0);
+
+            // Direct the draw commands to the render target resource
+            let barriers = {
+                let mut barrier = D3D12_RESOURCE_BARRIER {
+                    r#type: D3D12_RESOURCE_BARRIER_TYPE::D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                    flags: D3D12_RESOURCE_BARRIER_FLAGS::D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                    ..std::mem::zeroed()
+                };
+                barrier.anonymous.transition.subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                barrier.anonymous.transition.p_resource = current_resource.abi();
+                barrier.anonymous.transition.state_before =
+                    D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_RENDER_TARGET;
+                barrier.anonymous.transition.state_after =
+                    D3D12_RESOURCE_STATES::D3D12_RESOURCE_STATE_PRESENT;
+                [barrier]
+            };
+            self.list.ResourceBarrier(1, barriers.as_ptr());
 
             // Close list
-            self.list_graphics_direct.Close().ok()?;
+            self.list.Close().ok()?;
+            Ok(())
+        }
+    }
+
+    pub fn wait_for_previous_frame(&mut self) -> windows::Result<()> {
+        // This is bad practice says Microsoft's C++ example
+        unsafe {
+            let old_fence_value = self.fence_value;
+            self.queue.Signal(&self.fence, old_fence_value).ok()?;
+            self.fence_value += 1;
+            if self.fence.GetCompletedValue() < old_fence_value {
+                self.fence
+                    .SetEventOnCompletion(old_fence_value, self.fence_event)
+                    .ok()?;
+                WaitForSingleObject(self.fence_event, 0xFFFFFFFF);
+            }
             Ok(())
         }
     }
@@ -396,11 +674,12 @@ impl Window {
     pub fn render(&mut self) -> windows::Result<()> {
         self.populate_command_list()?;
         unsafe {
-            let mut lists = [Some(self.list_graphics_direct.cast::<ID3D12CommandList>()?)];
+            let mut lists = [Some(self.list.cast::<ID3D12CommandList>()?)];
             self.queue
                 .ExecuteCommandLists(lists.len() as _, lists.as_mut_ptr());
             self.swap_chain.Present(1, 0).ok()?;
         }
+        self.wait_for_previous_frame()?;
         Ok(())
     }
 }
